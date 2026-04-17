@@ -49,4 +49,26 @@ export class Usage {
   toString(): string {
     return `Usage(prompt=${this.promptTokens}, completion=${this.completionTokens}, total=${this.totalTokens})`;
   }
+
+  /**
+   * 序列化为JSON 安全对象
+   */
+  toJSON(): Record<string, unknown> {
+    return {
+      promptTokens: this.promptTokens,
+      completionTokens: this.completionTokens,
+      totalTokens: this.totalTokens,
+    };
+  }
+
+  /**
+   * 从 JSON 对象反序列化
+   */
+  static fromJSON(data: Record<string, unknown>): Usage {
+    return new Usage(
+      (data.promptTokens as number) ?? 0,
+      (data.completionTokens as number) ?? 0,
+      (data.totalTokens as number) ?? 0
+    );
+  }
 }

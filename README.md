@@ -14,7 +14,8 @@ await agent.run("你好");
 
 ## ✨ 核心特性
 
-- 🌳 **树结构会话管理** — 天然支持对话分支、回退、分页导航
+-🌳 **树结构会话管理** — 天然支持对话分支、回退、分页导航
+
 - 🔧 **工具生命周期钩子** — ON_CREATE → ON_VALIDATE → BEFORE_EXECUTE → AFTER_EXECUTE → ON_SERIALIZE / ON_ERROR
 - 🌊 **流式解析器** — 无状态纯函数设计，结构化事件驱动
 - 📝 **提示词构建器** — 声明式注入规则 + 生命周期 + 概率触发 + 扫描深度
@@ -110,15 +111,15 @@ msg.isLeaf;       // 是否叶子节点
 
 #### 消息内容类型 (MessagePart)
 
-| 类型 | 说明 |
-|------|------|
-| `TextPart` | 文本内容 |
-| `ImagePart` | 图片（URL / data URI /本地路径） |
-| `AudioPart` | 音频 |
-| `FilePart` | 文件附件 |
-| `ToolCallPart` | LLM 发起的工具调用 |
-| `ToolResultPart` | 工具执行结果 |
-| `ThinkingPart` | 模型推理/思考过程 |
+| 类型               | 说明                       |
+| ---------------- | ------------------------ |
+| `TextPart`       | 文本内容                     |
+| `ImagePart`      | 图片（URL / data URI /本地路径） |
+| `AudioPart`      | 音频                       |
+| `FilePart`       | 文件附件                     |
+| `ToolCallPart`   | LLM 发起的工具调用              |
+| `ToolResultPart` | 工具执行结果                   |
+| `ThinkingPart`   | 模型推理/思考过程                |
 
 ### 💬 Session — 会话管理
 
@@ -289,21 +290,21 @@ const finalEvents = parser.finish(); // TEXT_DONE, THINKING_DONE, MESSAGE_DONE
 
 #### 事件类型
 
-| 事件 | 说明 |
-|------|------|
-| `THINKING_DELTA` | 思考/推理增量 |
-| `THINKING_DONE` | 思考完成 |
-| `TEXT_DELTA` | 文本增量 |
-| `TEXT_DONE` | 文本完成 |
-| `TOOL_CALL_START` | 工具调用开始 |
-| `TOOL_CALL_DELTA` | 工具参数增量 |
-| `TOOL_CALL_DONE` | 工具调用完成 |
-| `TOOL_EXECUTE_START` | 工具执行开始 |
-| `TOOL_EXECUTE_DONE` | 工具执行完成 |
-| `MESSAGE_DONE` | 消息组装完成 |
-| `TURN_START` | 新一轮循环开始 |
-| `TURN_END` | 一轮循环结束 |
-| `ERROR` | 错误 |
+| 事件                   | 说明      |
+| -------------------- | ------- |
+| `THINKING_DELTA`     | 思考/推理增量 |
+| `THINKING_DONE`      | 思考完成    |
+| `TEXT_DELTA`         | 文本增量    |
+| `TEXT_DONE`          | 文本完成    |
+| `TOOL_CALL_START`    | 工具调用开始  |
+| `TOOL_CALL_DELTA`    | 工具参数增量  |
+| `TOOL_CALL_DONE`     | 工具调用完成  |
+| `TOOL_EXECUTE_START` | 工具执行开始  |
+| `TOOL_EXECUTE_DONE`  | 工具执行完成  |
+| `MESSAGE_DONE`       | 消息组装完成  |
+| `TURN_START`         | 新一轮循环开始 |
+| `TURN_END`           | 一轮循环结束  |
+| `ERROR`              | 错误      |
 
 ### 📝 PromptBuilder — 提示词构建器
 
@@ -476,26 +477,26 @@ interface MessageAdapter {
 
 内置 `OpenAIAdapter`，支持所有 OpenAI 兼容 API：
 
-| 平台 | 支持 |
-|------|:----:|
-| OpenAI | ✅ |
-| DeepSeek | ✅ |
-| 通义千问 (Qwen) | ✅ |
-| Kimi (Moonshot) | ✅ |
-| GLM (智谱) | ✅ |
-| MiniMax | ✅ |
-| Claude (兼容模式) | ✅ |
-| Gemini (兼容模式) | ✅ |
+| 平台              | 支持  |
+| --------------- |:---:|
+| OpenAI          | ✅   |
+| DeepSeek        | ✅   |
+| 通义千问 (Qwen)     | ✅   |
+| Kimi (Moonshot) | ✅   |
+| GLM (智谱)        | ✅   |
+| MiniMax         | ✅   |
+| Claude (兼容模式)   | ✅   |
+| Gemini (兼容模式)   | ✅   |
 
 ### 思考内容兼容
 
 自动识别不同模型的思考字段：
 
-| 模型 | 字段名 | 支持 |
-|------|--------|:----:|
-| DeepSeek Reasoner | `reasoning_content` | ✅ |
-| Qwen (思考模式) | `reasoning_content` | ✅ |
-| Claude (thinking) | `thinking` | ✅ |
+| 模型                | 字段名                 | 支持  |
+| ----------------- | ------------------- |:---:|
+| DeepSeek Reasoner | `reasoning_content` | ✅   |
+| Qwen (思考模式)       | `reasoning_content` | ✅   |
+| Claude (thinking) | `thinking`          | ✅   |
 
 ---
 

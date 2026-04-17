@@ -326,4 +326,67 @@ export class Message {
     }
     return [content];
   }
+
+  //========================
+  //  序列化 / 反序列化
+  // ========================
+
+  /**
+   * 序列化为 JSON 安全对象（含子树）
+   *
+   * 递归序列化所有 children，避免 parent 循环引用。
+   * 反序列化时通过 fromJSON 自动重建 parent 关系。
+   */
+  toJSON(): Record<string, unknown> {
+    const data: Record<string, unknown> ={
+      role: this.role,
+      parts: this.parts,
+      metadata: this.metadata,
+      tags: Array.from(this.tags),
+    };
+
+    if (this.model) data.model = this.model;
+    if (this.usage) data.usage = this.usage.toJSON();
+    if (this.children.length > 0) {
+      data.children = this.children.map((c) => c.toJSON());
+    }
+
+    return data;
+  }
+
+  /**
+   * 从 JSON 对象反序列化（含子树）
+   *
+   * 自动重建 parent/children 树结构关系。
+   */
+  static fromJSON(data: Record<string, unknown>): Message {
+    const role = data.role as Role;
+    const parts = (data.parts as MessagePart[]) || [];
+    const metadata = (data.metadata as Record<string, unknown>) || {};
+
+    const msg = new Message(role, parts, metadata);
+
+    // 恢复标签
+    const tags = data.tags as string[] | undefined;
+    if (tags) {
+      for (const t of tags) {
+        msg.tags.add(t);
+      }
+    }
+
+    // 恢复 model & usage
+    if (data.model) msg.model = data.model as string;
+    if (data.usage) msg.usage = Usage.fromJSON(data.usage as Record<string, unknown>);
+
+    // 递归恢复子节点
+    const childrenData = data.children as Record<string, unknown>[] | undefined;
+    if (childrenData) {
+      for (const childData of childrenData) {
+        const child = Message.fromJSON(childData);
+        msg.append(child);
+      }
+    }
+
+    return msg;
+  }
 }

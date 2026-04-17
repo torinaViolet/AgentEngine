@@ -87,6 +87,20 @@ export class Session {
   }
 
   /**
+   * 在cursor后追加任意已构建的 Message，移动cursor
+   *
+   * 与 addUser/addAssistant 不同，此方法直接使用传入的 Message 对象，
+   * 保留其所有 parts（多模态）、tags、metadata 等信息。
+   *
+   * @param message 已构建的 Message（任意角色）
+   */
+  addMessage(message: Message): Message {
+    this._cursor.append(message);
+    this._cursor = message;
+    return message;
+  }
+
+  /**
    * 在cursor后追加 Assistant 消息，移动cursor
    * @param message 已构建的 Assistant 消息（可能带usage/model）
    */
@@ -267,7 +281,7 @@ export class Session {
   // ========================
 
   /**
-   * 清空对话：删除root所有子节点，root内容清空，cursor 回到root
+   * 清空对话：删除root所有子节点，root内容清空，cursor回到root
    */
   clear(): void {
     this.root.children.length = 0;
@@ -292,5 +306,80 @@ export class Session {
       }
     }
     return total;
+  }
+
+  // ========================
+  //  序列化 / 反序列化
+  // ========================
+
+  /**
+   * 序列化为 JSON 安全对象
+   *
+   * 将整棵消息树序列化，同时记录 cursor 的路径以便恢复。
+   * cursor 路径用 children 索引数组表示，如 [0, 2, 0] 表示
+   * root → children[0] → children[2] → children[0]。
+   */
+  toJSON(): Record<string, unknown> {
+    return {
+      id: this.id,
+      title: this.title,
+      createdAt: this.createdAt.toISOString(),
+      root: this.root.toJSON(),
+      cursorPath: this.getCursorPath(),
+    };
+  }
+
+  /**
+   * 从 JSON 对象反序列化
+   *
+   * 重建完整的消息树和 cursor 位置。
+   */
+  static fromJSON(data: Record<string, unknown>): Session {
+    const rootData = data.root as Record<string, unknown>;
+    if (!rootData){
+      throw new Error("序列化数据缺少 root 字段");
+    }
+
+    const root = Message.fromJSON(rootData);
+    const session = new Session(root, data.id as string | undefined);
+
+    if (data.title) session.title = data.title as string;
+    if (data.createdAt) {
+      (session as any).createdAt = new Date(data.createdAt as string);
+    }
+
+    // 恢复 cursor 位置
+    const cursorPath = data.cursorPath as number[] | undefined;
+    if (cursorPath && cursorPath.length > 0) {
+      let node = root;
+      for (const childIndex of cursorPath) {
+        if (childIndex >= 0 && childIndex < node.children.length) {
+          node = node.children[childIndex];
+        } else {
+          break; // 路径无效，停在最后有效位置
+        }
+      }
+      session._cursor = node;
+    }
+
+    return session;
+  }
+
+  /**
+   * 计算从root 到 cursor 的路径（children 索引数组）
+   */
+  private getCursorPath(): number[] {
+    const path: number[] = [];
+    let node = this._cursor;
+
+    // 从cursor 回溯到 root，收集每一步的 child index
+    while (node.parent) {
+      const parent = node.parent;
+      const index = parent.children.indexOf(node);
+      path.unshift(index);
+      node = parent;
+    }
+
+    return path;
   }
 }

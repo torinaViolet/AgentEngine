@@ -148,3 +148,29 @@ export type StreamEvent =
   | TurnStartEvent
   | TurnEndEvent
   | ErrorEvent;
+
+/**
+ * 事件类型 → 事件数据结构的映射
+ *
+ * 用于 Agent.on() 的泛型推断，使注册特定事件时
+ * handler 参数自动推断为对应的事件类型。
+ *
+ * 例如：
+ *agent.on(StreamEventType.TEXT_DELTA, (e) => e.delta)
+ *   // e自动推断为 TextDeltaEvent，可直接访问 .delta
+ */
+export interface StreamEventMap {
+  [StreamEventType.THINKING_DELTA]: ThinkingDeltaEvent;
+  [StreamEventType.THINKING_DONE]: ThinkingDoneEvent;
+  [StreamEventType.TEXT_DELTA]: TextDeltaEvent;
+  [StreamEventType.TEXT_DONE]: TextDoneEvent;
+  [StreamEventType.TOOL_CALL_START]: ToolCallStartEvent;
+  [StreamEventType.TOOL_CALL_DELTA]: ToolCallDeltaEvent;
+  [StreamEventType.TOOL_CALL_DONE]: ToolCallDoneEvent;
+  [StreamEventType.TOOL_EXECUTE_START]: ToolExecuteStartEvent;
+  [StreamEventType.TOOL_EXECUTE_DONE]: ToolExecuteDoneEvent;
+  [StreamEventType.MESSAGE_DONE]: MessageDoneEvent;
+  [StreamEventType.TURN_START]: TurnStartEvent;
+  [StreamEventType.TURN_END]: TurnEndEvent;
+  [StreamEventType.ERROR]: ErrorEvent;
+}

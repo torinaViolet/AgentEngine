@@ -1,6 +1,7 @@
 export {
   StreamEventType,
   StreamEvent,
+  StreamEventMap,
   ThinkingDeltaEvent,
   ThinkingDoneEvent,
   TextDeltaEvent,

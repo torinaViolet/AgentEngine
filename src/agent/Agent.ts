@@ -3,12 +3,13 @@ import { MessagePart } from "../message/MessagePart";
 import { Usage } from "../message/Usage";
 import { MessageAdapter } from "../adapter/MessageAdapter";
 import { OpenAIAdapter } from "../adapter/OpenAIAdapter";
-import { ToolKit } from "../tool/ToolKit";
+import {ToolKit } from "../tool/ToolKit";
 import { Session } from "../session/Session";
 import { StreamParser } from "../stream/StreamParser";
 import {
   StreamEvent,
   StreamEventType,
+  StreamEventMap,
 } from "../stream/StreamEvent";
 import { PromptBuilder } from "../prompt/PromptBuilder";
 import { RequestConfig } from "../config/RequestConfig";
@@ -45,13 +46,13 @@ export interface AgentOptions {
 }
 
 /** 事件处理函数签名 */
-type EventHandler = (event: StreamEvent) => void;
+type EventHandler<T extends StreamEvent = StreamEvent> = (event: T) => void;
 
 /**
  * 智能体 — 自动循环层
  *
  * 串联Session + Adapter + ToolKit + StreamParser，
- * 实现流式调用 → 解析 → 工具执行 → 再调用的自动循环。
+ * 实现流式调用→ 解析 → 工具执行 → 再调用的自动循环。
  *
  * 用法:
  *const agent = new Agent({ client, model, session, toolkit });
@@ -90,13 +91,26 @@ export class Agent {
     }
   }
 
-  // ========================
+  //========================
   //  事件监听
   // ========================
 
   /**
    * 注册事件监听（链式）
+   *
+   * 支持类型安全的事件推断：
+   *agent.on(StreamEventType.TEXT_DELTA, (e) => e.delta) // e自动推断为 TextDeltaEvent
+   *
+   * 也支持同时监听多个事件类型。
    */
+  on<T extends StreamEventType>(
+    event: T,
+    handler: (event: StreamEventMap[T]) => void
+  ): this;
+  on<T extends StreamEventType>(
+    event: T[],
+    handler: (event: StreamEventMap[T]) => void
+  ): this;
   on(
     event: StreamEventType | StreamEventType[],
     handler: EventHandler
@@ -131,25 +145,15 @@ export class Agent {
 
   /**
    * 传入已构建的 Message 运行
+   *
+   * 直接将完整的 Message 对象追加到 Session，
+   * 保留其所有 parts（多模态内容）、tags、metadata。
    */
   async runWith(
     message: Message,
     options?: Record<string, unknown>
   ): Promise<Message> {
-    this._session.addUser(message.text);
-    // 替换刚插入的简单消息为传入的完整消息
-    // 实际上应该直接把传入的message append到session
-    // 修正: 先rewind再用原始message
-    const cursor = this._session.cursor;
-    // cursor就是刚 addUser 的消息，直接用它即可
-    // 如果传入的message有标签等额外信息，复制过来
-    for (const tag of message.tags) {
-      cursor.tag(tag);
-    }
-    for (const [key, val] of Object.entries(message.metadata)) {
-      cursor.setMeta(key, val);
-    }
-
+    this._session.addMessage(message);
     return this.executeLoop(options);
   }
 
@@ -306,7 +310,7 @@ export class Agent {
       // 提取组装好的Message
       const assistantMsg = this.extractMessage(finalEvents);
 
-      // 填充 model 和 usage
+      // 填充 model和 usage
       assistantMsg.model = this._model;
       if (streamUsage) {
         assistantMsg.usage = streamUsage;
@@ -330,33 +334,33 @@ export class Agent {
         break;
       }
 
-      // ---- 执行工具 ----
+      // ---- 并行执行工具 ----
       const toolCalls = assistantMsg.toolCalls;
-      const toolResults: Message[] = [];
 
+      // 为每个工具调用发出 START 事件
       for (const tc of toolCalls) {
-        // TOOL_EXECUTE_START
         this.emit({
           type: StreamEventType.TOOL_EXECUTE_START,
           toolCallId: tc.toolCallId,
           name: tc.name,
         });
+      }
 
-        const result = await this._toolkit.execute(tc);
-        toolResults.push(result);
+      // 并行执行所有工具调用
+      const toolResults = await this._toolkit.executeAll(toolCalls);
 
-        // TOOL_EXECUTE_DONE
+      // 为每个工具调用发出 DONE 事件
+      for (let i = 0; i < toolCalls.length; i++) {
         this.emit({
           type: StreamEventType.TOOL_EXECUTE_DONE,
-          toolCallId: tc.toolCallId,
-          name: tc.name,
-          result,
+          toolCallId: toolCalls[i].toolCallId,
+          name: toolCalls[i].name,
+          result: toolResults[i],
         });
       }
 
       // 添加工具结果到Session
-      this._session.addTool(toolResults);
-    }
+      this._session.addTool(toolResults);}
 
     if (!lastAssistantMsg) {
       throw new Error("Agent 运行失败：未获得任何回复");

@@ -39,6 +39,7 @@ export { McpToolAdapter } from "./tool";
 export {
   StreamEventType,
   StreamEvent,
+  StreamEventMap,
   ThinkingDeltaEvent,
   ThinkingDoneEvent,
   TextDeltaEvent,
