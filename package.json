@@ -41,9 +41,9 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/torinaViolet/AgentEngine.git"
   },
-  "homepage": "",
+  "homepage": "https://github.com/torinaViolet/AgentEngine#readme",
   "engines": {
     "node": ">=18.0.0"
   },
