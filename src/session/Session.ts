@@ -6,15 +6,7 @@ import { Inserter } from "./Inserter";
 import { Query } from "./Query";
 import { Paginator } from "./Paginator";
 import { traverseTree } from "./matchUtils";
-
-/** 生成唯一ID */
-function generateId(): string {
-  return (
-    Date.now().toString(36) +
-    "-" +
-    Math.random().toString(36).slice(2, 10)
-  );
-}
+import { generateId } from "../utils";
 
 /**
  * 对话会话管理器
@@ -40,6 +32,10 @@ export class Session {
 
   /** 当前指针（指向最新消息） */
   private _cursor: Message;
+
+  /** Usage 缓存 */
+  private _cachedUsage?: Usage;
+  private _usageDirty: boolean = true;
 
   private constructor(root: Message, id?: string) {
     this.id = id || generateId();
@@ -107,6 +103,7 @@ export class Session {
   addAssistant(message: Message): Message {
     this._cursor.append(message);
     this._cursor = message;
+    this._usageDirty = true;
     return message;
   }
 
@@ -118,6 +115,7 @@ export class Session {
       this._cursor.append(msg);
       this._cursor = msg;
     }
+    this._usageDirty = true;
   }
 
   // ========================
@@ -151,6 +149,7 @@ export class Session {
       throw new Error("目标消息不属于本会话");
     }
     this._cursor = toMessage;
+    this._usageDirty = true;
   }
 
   /**
@@ -287,6 +286,8 @@ export class Session {
     this.root.children.length = 0;
     this.root.parts.length = 0;
     this._cursor = this.root;
+    this._cachedUsage = undefined;
+    this._usageDirty = true;
   }
 
   // ========================
@@ -298,6 +299,9 @@ export class Session {
    * （遍历全树）
    */
   get totalUsage(): Usage {
+    if (!this._usageDirty && this._cachedUsage) {
+      return this._cachedUsage;
+    }
     const all = traverseTree(this.root);
     let total = Usage.zero();
     for (const node of all) {
@@ -305,6 +309,8 @@ export class Session {
         total = total.add(node.usage);
       }
     }
+    this._cachedUsage = total;
+    this._usageDirty = false;
     return total;
   }
 
@@ -336,7 +342,7 @@ export class Session {
    */
   static fromJSON(data: Record<string, unknown>): Session {
     const rootData = data.root as Record<string, unknown>;
-    if (!rootData){
+    if (!rootData) {
       throw new Error("序列化数据缺少 root 字段");
     }
 

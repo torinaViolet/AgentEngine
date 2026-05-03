@@ -4,7 +4,10 @@ import { Context } from "./Context";
 import { ToolCall } from "./ToolCall";
 
 /** 工具执行函数签名 */
-export type ToolFunction = (args: Record<string, unknown>) => unknown | Promise<unknown>;
+export type ToolFunction = (
+  args: Record<string, unknown>,
+  ctx: Context
+) => unknown | Promise<unknown>;
 
 /**钩子处理函数签名 */
 export type HookHandler = (ctx: Context) => void | Context;
@@ -15,7 +18,7 @@ export interface ToolSchema {
   function: {
     name: string;
     description: string;
-    parameters:{
+    parameters: {
       type: "object";
       properties: Record<string, unknown>;
       required: string[];
@@ -182,28 +185,45 @@ export class Tool {
    * @param toolCallId LLM 返回的 tool_call id
    * @param args 调用参数
    */
-  create(toolCallId: string, args: Record<string, unknown>): ToolCall {
+  create(
+    toolCallId: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal
+  ): ToolCall {
     this.guardBuilt();
 
-    const ctx = new Context(toolCallId, this._name, { ...args });
+    const ctx = new Context(toolCallId, this._name, { ...args }, signal);
 
-    // ---- ON_CREATE ----
-    this.fire(Hook.ON_CREATE, ctx);
+    try {
+      // ---- ON_CREATE ----
+      this.fire(Hook.ON_CREATE, ctx);
 
-    // ---- ON_VALIDATE ----
-    this.fire(Hook.ON_VALIDATE, ctx);
+      // ---- ON_VALIDATE ----
+      this.fire(Hook.ON_VALIDATE, ctx);
 
-    //内置校验：必填参数
-    const requiredParams = this._params.filter((p) => p.isRequired);
-    const missing = requiredParams
-      .filter((p) => !(p.name in ctx.arguments))
-      .map((p) => p.name);
+      //内置校验：必填参数
+      const requiredParams = this._params.filter((p) => p.isRequired);
+      const missing = requiredParams
+        .filter((p) => !(p.name in ctx.arguments))
+        .map((p) => p.name);
 
-    if (missing.length > 0) {
-      throw new Error(`缺少必填参数: ${missing.join(", ")}`);
+      if (missing.length > 0) {
+        throw new Error(`缺少必填参数: ${missing.join(", ")}`);
+      }
+    } catch (e) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      ctx.error = error;
+
+      // ---- ON_ERROR ----
+      this.fire(Hook.ON_ERROR, ctx);
+
+      // ON_ERROR 未提供降级结果则继续抛出
+      if (ctx.result === undefined) {
+        throw error;
+      }
     }
 
-    return new ToolCall(this, toolCallId, this._name, ctx.arguments);
+    return new ToolCall(this, toolCallId, this._name, ctx.arguments, signal);
   }
 
   /**

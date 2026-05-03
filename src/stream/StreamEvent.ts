@@ -1,5 +1,14 @@
 import { Message } from "../message/Message";
 
+/** 模型流式完成原因（兼容 OpenAI finish_reason，并允许扩展字符串） */
+export type FinishReason =
+  | "stop"
+  | "length"
+  | "tool_calls"
+  | "content_filter"
+  | "function_call"
+  | string;
+
 /**
  * 流式事件类型枚举
  */
@@ -18,10 +27,18 @@ export enum StreamEventType {
   TOOL_CALL_DELTA = "tool_call_delta",
   /** 单个工具调用完成（完整参数就绪） */
   TOOL_CALL_DONE = "tool_call_done",
+  /** 工具调用需要审批 */
+  TOOL_APPROVAL_REQUIRED = "tool_approval_required",
+  /** 工具调用审批通过 */
+  TOOL_APPROVAL_ACCEPTED = "tool_approval_accepted",
+  /** 工具调用审批拒绝 */
+  TOOL_APPROVAL_REJECTED = "tool_approval_rejected",
   /** 工具开始执行 */
   TOOL_EXECUTE_START = "tool_execute_start",
   /** 工具执行完成 */
   TOOL_EXECUTE_DONE = "tool_execute_done",
+  /** 工具执行失败 */
+  TOOL_EXECUTE_ERROR = "tool_execute_error",
   /** 整条消息组装完毕 */
   MESSAGE_DONE = "message_done",
   /** 新一轮循环开始 */
@@ -92,6 +109,34 @@ export interface ToolCallDoneEvent {
   arguments: string;
 }
 
+export interface ToolApprovalRequiredEvent {
+  type: StreamEventType.TOOL_APPROVAL_REQUIRED;
+  approvalId: string;
+  toolCallId: string;
+  name: string;
+  /** 已解析参数 */
+  arguments: Record<string, unknown>;
+  /** 原始参数 JSON string */
+  rawArguments: string;
+  /** 当前 Agent turn */
+  turn: number;
+}
+
+export interface ToolApprovalAcceptedEvent {
+  type: StreamEventType.TOOL_APPROVAL_ACCEPTED;
+  approvalId: string;
+  toolCallId: string;
+  name: string;
+}
+
+export interface ToolApprovalRejectedEvent {
+  type: StreamEventType.TOOL_APPROVAL_REJECTED;
+  approvalId: string;
+  toolCallId: string;
+  name: string;
+  reason?: string;
+}
+
 export interface ToolExecuteStartEvent {
   type: StreamEventType.TOOL_EXECUTE_START;
   toolCallId: string;
@@ -106,10 +151,21 @@ export interface ToolExecuteDoneEvent {
   result: Message;
 }
 
+export interface ToolExecuteErrorEvent {
+  type: StreamEventType.TOOL_EXECUTE_ERROR;
+  toolCallId: string;
+  name: string;
+  error: Error;
+  /** 写回模型的错误结果；throw 策略下可能为空 */
+  result?: Message;
+}
+
 export interface MessageDoneEvent {
   type: StreamEventType.MESSAGE_DONE;
   /** 组装完成的 Message */
   message: Message;
+  /** 模型完成原因，例如 stop / length / tool_calls */
+  finishReason?: FinishReason;
 }
 
 export interface TurnStartEvent {
@@ -142,8 +198,12 @@ export type StreamEvent =
   | ToolCallStartEvent
   | ToolCallDeltaEvent
   | ToolCallDoneEvent
+  | ToolApprovalRequiredEvent
+  | ToolApprovalAcceptedEvent
+  | ToolApprovalRejectedEvent
   | ToolExecuteStartEvent
   | ToolExecuteDoneEvent
+  | ToolExecuteErrorEvent
   | MessageDoneEvent
   | TurnStartEvent
   | TurnEndEvent
@@ -167,8 +227,12 @@ export interface StreamEventMap {
   [StreamEventType.TOOL_CALL_START]: ToolCallStartEvent;
   [StreamEventType.TOOL_CALL_DELTA]: ToolCallDeltaEvent;
   [StreamEventType.TOOL_CALL_DONE]: ToolCallDoneEvent;
+  [StreamEventType.TOOL_APPROVAL_REQUIRED]: ToolApprovalRequiredEvent;
+  [StreamEventType.TOOL_APPROVAL_ACCEPTED]: ToolApprovalAcceptedEvent;
+  [StreamEventType.TOOL_APPROVAL_REJECTED]: ToolApprovalRejectedEvent;
   [StreamEventType.TOOL_EXECUTE_START]: ToolExecuteStartEvent;
   [StreamEventType.TOOL_EXECUTE_DONE]: ToolExecuteDoneEvent;
+  [StreamEventType.TOOL_EXECUTE_ERROR]: ToolExecuteErrorEvent;
   [StreamEventType.MESSAGE_DONE]: MessageDoneEvent;
   [StreamEventType.TURN_START]: TurnStartEvent;
   [StreamEventType.TURN_END]: TurnEndEvent;

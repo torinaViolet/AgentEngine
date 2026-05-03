@@ -4,7 +4,13 @@ import { Usage } from "../message/Usage";
 import { MessagePart, ImagePart, FilePart, AudioPart } from "../message/MessagePart";
 import { MediaResolver } from "../media/MediaResolver";
 import { DefaultMediaResolver } from "../media/DefaultMediaResolver";
-import { MessageAdapter, SerializedResult } from "./MessageAdapter";
+import {
+  MessageAdapter,
+  SerializedResult,
+  SerializeOptions,
+  normalizeThinkingOptions,
+  shouldSerializeThinking,
+} from "./MessageAdapter";
 
 /**
  * OpenAI 消息适配器
@@ -17,6 +23,11 @@ import { MessageAdapter, SerializedResult } from "./MessageAdapter";
  * - 本地文件 / data URI → 通过 MediaResolver 转为 data URI
  */
 export class OpenAIAdapter implements MessageAdapter {
+  readonly capabilities = {
+    nativeThinking: true,
+    messageThinking: true,
+  };
+
   private resolver: MediaResolver;
 
   constructor(resolver?: MediaResolver) {
@@ -27,11 +38,14 @@ export class OpenAIAdapter implements MessageAdapter {
   //Serialize: Message[] → OpenAI JSON
   // ========================
 
-  async serialize(messages: Message[]): Promise<SerializedResult> {
+  async serialize(messages: Message[], options?: SerializeOptions): Promise<SerializedResult> {
+    const thinkingOptions = normalizeThinkingOptions(options, this.capabilities);
     const systemMessages: string[] = [];
     const serialized: unknown[] = [];
 
-    for (const msg of messages) {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      const includeThinking = shouldSerializeThinking(msg, i, messages, thinkingOptions);
       if (msg.role === Role.System) {
         // System消息正常放入 messages 数组（OpenAI 支持）
         serialized.push({
@@ -49,7 +63,7 @@ export class OpenAIAdapter implements MessageAdapter {
       }
 
       if (msg.role === Role.Assistant) {
-        serialized.push(this.serializeAssistantMessage(msg));
+        serialized.push(this.serializeAssistantMessage(msg, includeThinking, thinkingOptions.mode, thinkingOptions.messagePrefix));
         continue;
       }
 
@@ -68,24 +82,32 @@ export class OpenAIAdapter implements MessageAdapter {
 
   // ---- Assistant 消息 ----
 
-  private serializeAssistantMessage(msg: Message): unknown {
+  private serializeAssistantMessage(
+    msg: Message,
+    includeThinking: boolean,
+    thinkingMode: "none" | "native" | "message",
+    thinkingPrefix: string
+  ): unknown {
     const toolCalls = msg.toolCalls;
+    const result: Record<string, unknown> = {
+      role: "assistant",
+      ...this.extractNameMeta(msg),
+    };
 
+    // 思考内容按序列化策略回传：默认不回传，避免浪费 token
+    const thinking = includeThinking ? msg.thinking : "";
+    if (thinking && thinkingMode === "native") {
+      result.reasoning_content = thinking;
+    }
+
+    // 文本内容
+    const text = msg.text;
+    result.content = thinking && thinkingMode === "message"
+      ? `${thinkingPrefix}${thinking}\n\n${text}`
+      : text || null;
+
+    // 工具调用
     if (toolCalls.length > 0) {
-      // 包含工具调用
-      const result: Record<string, unknown> = {
-        role: "assistant",
-        ...this.extractNameMeta(msg),
-      };
-
-      // 如果同时有文本内容（不含thinking）
-      const text = msg.text;
-      if (text) {
-        result.content = text;
-      } else {
-        result.content = null;
-      }
-
       result.tool_calls = toolCalls.map((tc) => ({
         id: tc.toolCallId,
         type: "function",
@@ -94,16 +116,9 @@ export class OpenAIAdapter implements MessageAdapter {
           arguments: tc.arguments,
         },
       }));
-
-      return result;
     }
 
-    // 纯文本（序列化时跳过 thinking，不回传给 API）
-    return {
-      role: "assistant",
-      content: msg.text || null,
-      ...this.extractNameMeta(msg),
-    };
+    return result;
   }
 
   // ---- User 消息 ----
@@ -243,17 +258,23 @@ export class OpenAIAdapter implements MessageAdapter {
   // ========================
 
   deserialize(raw: unknown): Message {
-    const data = raw as Record<string, any>;
+    const data = raw as Record<string, unknown>;
 
     // OpenAI Chat Completion choice.message 结构
     const role = data.role as string;
+    const content = data.content as string | undefined;
 
     // 提取思考内容（兼容 reasoning_content / thinking）
     const thinkingContent =
-      data.reasoning_content ?? data.thinking ?? null;
+      (data.reasoning_content ?? data.thinking ?? null) as string | null;
+
+    // 工具调用列表
+    const toolCallsRaw = data.tool_calls as
+      | Array<{ id: string; function: { name: string; arguments: string } }>
+      | undefined;
 
     // 1. Assistant 带 tool_calls
-    if (role === "assistant" && data.tool_calls && data.tool_calls.length > 0) {
+    if (role === "assistant" && toolCallsRaw && toolCallsRaw.length > 0) {
       const parts: MessagePart[] = [];
 
       // 思考内容
@@ -262,11 +283,11 @@ export class OpenAIAdapter implements MessageAdapter {
       }
 
       // 可能同时有文本
-      if (data.content) {
-        parts.push({ type: "text", text: data.content });
+      if (content) {
+        parts.push({ type: "text", text: content });
       }
 
-      for (const tc of data.tool_calls) {
+      for (const tc of toolCallsRaw) {
         parts.push({
           type: "tool_call",
           toolCallId: tc.id,
@@ -284,8 +305,8 @@ export class OpenAIAdapter implements MessageAdapter {
       if (thinkingContent) {
         parts.push({ type: "thinking", text: thinkingContent });
       }
-      if (data.content) {
-        parts.push({ type: "text", text: data.content });
+      if (content) {
+        parts.push({ type: "text", text: content });
       }
       return new Message(Role.Assistant, parts);
     }
@@ -297,7 +318,7 @@ export class OpenAIAdapter implements MessageAdapter {
       tool: Role.Tool,
     };
     const mappedRole = roleMap[role] || Role.User;
-    return new Message(mappedRole, [{ type: "text", text: data.content || "" }]);
+    return new Message(mappedRole, [{ type: "text", text: content || "" }]);
   }
 
   // ========================
@@ -311,19 +332,20 @@ export class OpenAIAdapter implements MessageAdapter {
    * @param raw 完整的 chat.completions.create() 返回值
    */
   deserializeResponse(raw: unknown): Message {
-    const data = raw as Record<string, any>;
+    const data = raw as Record<string, unknown>;
 
     // 从 choices[0].message 解析消息本体
-    const choice = data.choices?.[0];
+    const choices = data.choices as Array<Record<string, unknown>> | undefined;
+    const choice = choices?.[0];
     if (!choice) {
       throw new Error("API响应中没有 choices");
     }
 
-    const message = this.deserialize(choice.message);
+    const message = this.deserialize(choice.message as Record<string, unknown>);
 
     // 填充 model
     if (data.model) {
-      message.model = data.model;
+      message.model = data.model as string;
     }
 
     // 填充 usage

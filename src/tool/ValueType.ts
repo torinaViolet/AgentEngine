@@ -7,4 +7,5 @@ export enum ValueType {
   Number = "number",
   Boolean = "boolean",
   Array = "array",
+  Object = "object",
 }

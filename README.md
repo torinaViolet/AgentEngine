@@ -14,16 +14,17 @@ await agent.run("你好");
 
 ## ✨ 核心特性
 
--🌳 **树结构会话管理** — 天然支持对话分支、回退、分页导航
-
+- 🌳 **树结构会话管理** — 天然支持对话分支、回退、分页导航
 - 🔧 **工具生命周期钩子** — ON_CREATE → ON_VALIDATE → BEFORE_EXECUTE → AFTER_EXECUTE → ON_SERIALIZE / ON_ERROR
 - 🌊 **流式解析器** — 无状态纯函数设计，结构化事件驱动
-- 📝 **提示词构建器** — 声明式注入规则 + 生命周期 + 概率触发 + 扫描深度
-- ⚙️ **请求参数配置器** — 预设模式+ 链式构建 + 三层优先级合并
+- 📝 **提示词构建器** — 声明式注入规则 + 数组操作管线 + 生命周期 + 概率触发
+- ⚙️ **请求参数配置器** — 预设模式 + 链式构建 + 三层优先级合并
 - 🔌 **MCP 原生集成** — 一行代码接入，与手动工具完全同构
-- 🎨 **多模态支持** — 图片/ 音频 / 文件，媒体资源懒加载
-- 💭 **思考内容提取** — 兼容 DeepSeek / Qwen / Claude 的推理过程
-- 🔄 **适配器模式** — 统一消息模型，一个接口换平台
+- 🎨 **多模态支持** — 图片 / 音频 / 文件，媒体资源懒加载
+- 💭 **思考内容提取** — 兼容 DeepSeek / Qwen / Claude / Gemini 的推理过程
+- 🔄 **多平台适配器** — OpenAI / Anthropic / Gemini，统一消息模型，一个接口换平台
+- 🛡️ **工具审批机制** — 自动 / 手动 / 自定义审批，支持超时策略
+- ⏸️ **中断与恢复** — 支持中断当前运行并从断点恢复
 
 ---
 
@@ -32,33 +33,45 @@ await agent.run("你好");
 ```
 AgentEngine
 ├── 📨 Message       统一消息模型（多模态 + 树结构）
-├── 🔌 Adapter       消息序列化适配器（OpenAI / 可扩展）
+├── 🔌 Adapter       消息序列化适配器（OpenAI / Anthropic / Gemini）
 ├── 🖼️ Media         媒体资源懒加载解析器
 ├── 💬 Session       会话管理（树结构 + 分支 + 分页）
 ├── 🔧 Tool          工具系统（Builder + 生命周期钩子 + MCP）
 ├── 🌊 Stream        流式解析器（纯函数 + 结构化事件）
-├── 📝 Prompt        提示词构建器（声明式注入 + 生命周期）
+├── 📝 Prompt        提示词构建器（声明式注入 + 数组操作管线）
 ├── ⚙️ Config        请求参数配置器（预设 + 链式构建）
-└── 🤖 Agent         智能体编排层（串联一切 + 自动循环）
+└── 🤖 Agent         智能体编排层（串联一切 + 自动循环 + 审批 + 中断恢复）
 ```
 
 ---
 
 ## 🚀 快速开始
 
-### 安装依赖
+### 安装
 
 ```bash
-npm install
+npm install @notic/agent-engine
+```
+
+#### Peer Dependencies
+
+根据你使用的平台，安装对应的客户端 SDK：
+
+```bash
+# OpenAI / DeepSeek / Qwen 等 OpenAI 兼容平台
+npm install openai
+
+# MCP 集成（可选）
+npm install @modelcontextprotocol/sdk
 ```
 
 ### 最简示例
 
 ```typescript
-import { Agent, Session, StreamEventType } from "./src";
+import { Agent, Session, StreamEventType } from "@notic/agent-engine";
 import { OpenAI } from "openai";
 
-const client = new OpenAI({ apiKey:"sk-...", baseURL: "..." });
+const client = new OpenAI({ apiKey: "sk-...", baseURL: "..." });
 
 const agent = new Agent({
   client,
@@ -107,19 +120,23 @@ msg.getHistory(); // 从根到当前的路径
 msg.depth;        // 在树中的深度
 msg.isRoot;       // 是否根节点
 msg.isLeaf;       // 是否叶子节点
+
+// 序列化与反序列化
+const json = msg.toJSON();
+const restored = Message.fromJSON(json);
 ```
 
 #### 消息内容类型 (MessagePart)
 
-| 类型               | 说明                       |
-| ---------------- | ------------------------ |
-| `TextPart`       | 文本内容                     |
-| `ImagePart`      | 图片（URL / data URI /本地路径） |
-| `AudioPart`      | 音频                       |
-| `FilePart`       | 文件附件                     |
-| `ToolCallPart`   | LLM 发起的工具调用              |
-| `ToolResultPart` | 工具执行结果                   |
-| `ThinkingPart`   | 模型推理/思考过程                |
+| 类型               | 说明                        |
+| ---------------- | ------------------------- |
+| `TextPart`       | 文本内容                      |
+| `ImagePart`      | 图片（URL / data URI / 本地路径） |
+| `AudioPart`      | 音频                        |
+| `FilePart`       | 文件附件                      |
+| `ToolCallPart`   | LLM 发起的工具调用               |
+| `ToolResultPart` | 工具执行结果                    |
+| `ThinkingPart`   | 模型推理/思考过程                 |
 
 ### 💬 Session — 会话管理
 
@@ -139,10 +156,10 @@ session.rewind(branchPoint);
 session.addUser("换个话题"); // 自动产生新分支
 
 // 分支导航
-session.allLeaves;// 所有分支末端
+session.allLeaves;   // 所有分支末端
 session.branches;    // 所有分支路径
 
-// 分页器— 在分支间切换
+// 分页器 — 在分支间切换
 const pag = session.paginators[0];
 pag.next();          // 下一个分支
 pag.prev();          // 上一个分支
@@ -153,12 +170,16 @@ pag.total;           // 总分支数
 session.systemPrompt = "新的系统提示";
 
 // Token 统计
-session.totalUsage;  // 累计所有 Assistant 消息的Usage
+session.totalUsage;  // 全树累计 Usage（带缓存）
+
+// 序列化
+const json = session.toJSON();
+const restored = Session.fromJSON(json);
 ```
 
 #### Inserter — 命令式插入器
 
-用于在对话树中精确插入消息。
+游标式插入器，通过移动光标定位插入点，支持事务提交。执行后自动报废。
 
 ```typescript
 const inserter = session.inserter;
@@ -173,6 +194,12 @@ inserter
   .moveByTags(["context"])
   .insertUserBefore("补充信息")
   .execute();
+
+// 按内容定位
+inserter
+  .moveByContent(["关键词"])
+  .insertAfter(Message.system("补充上下文"))
+  .execute();
 ```
 
 #### Query — 查询系统
@@ -180,10 +207,15 @@ inserter
 ```typescript
 const query = session.query;
 
+// 在当前分支 / 全树中查找
 query.findByContent(["天气"], { scope: "branch" });
 query.findByTags(["important"], { scope: "tree" });
 query.findByRole(Role.User);
 query.findFirst({ content: ["关键词"] });
+query.findLast({ tags: ["context"] });
+
+// 自定义规则
+query.findBy((msg) => msg.hasThinking, "tree");
 ```
 
 ### 🔧 Tool — 工具系统
@@ -191,19 +223,21 @@ query.findFirst({ content: ["关键词"] });
 Builder 模式定义工具，完整的生命周期钩子。
 
 ```typescript
-const weatherTool = Tool.create(async (args) => {
+const weatherTool = Tool.create(async (args, ctx) => {
+    ctx.throwIfAborted(); // 支持中断检查
     const city = args.city as string;
     return await fetchWeather(city);
   })
   .name("get_weather")
   .description("获取指定城市的天气")
-  .params(Param.string("city").desc("城市名称").required(),
+  .params(
+    Param.string("city").desc("城市名称").required(),
     Param.string("unit").desc("温度单位").enum(["celsius", "fahrenheit"]),
   )
   // 生命周期钩子
   .on(Hook.BEFORE_EXECUTE, (ctx) => {
     console.log(`即将查询: ${ctx.arguments.city}`);
-    // ctx.cancel("理由")可取消执行
+    // ctx.cancel("理由") 可取消执行
   })
   .on(Hook.AFTER_EXECUTE, (ctx) => {
     // 可改写结果
@@ -214,17 +248,41 @@ const weatherTool = Tool.create(async (args) => {
     ctx.result = "天气服务暂不可用";
   })
   .on(Hook.ON_SERIALIZE, (ctx) => {
-    // 自定义返回给LLM 的内容
+    // 自定义返回给 LLM 的内容
   })
   .build();
+```
+
+#### 参数定义
+
+支持嵌套对象与数组：
+
+```typescript
+// 嵌套对象
+Param.object("address", [
+  Param.string("city").desc("城市").required(),
+  Param.object("geo", [
+    Param.number("lat").desc("纬度").required(),
+    Param.number("lng").desc("经度").required(),
+  ]),
+]);
+
+// 对象数组
+Param.array("items", [
+  Param.string("name").desc("名称").required(),
+  Param.number("count").desc("数量"),
+]);
 ```
 
 #### 生命周期
 
 ```
-ON_CREATE → ON_VALIDATE → BEFORE_EXECUTE → execute → AFTER_EXECUTE → ON_SERIALIZE↓
-                                           ON_ERROR
+ON_CREATE → ON_VALIDATE → BEFORE_EXECUTE → execute → AFTER_EXECUTE → ON_SERIALIZE
+                                              ↓
+                                          ON_ERROR
 ```
+
+> **注意**：`ON_CREATE` 和 `ON_VALIDATE` 中的异常也会触发 `ON_ERROR`。整个生命周期共享同一个 `Context` 实例。
 
 #### ToolKit — 工具包管理
 
@@ -241,6 +299,12 @@ const tools = toolkit.schemas;
 // 执行
 const result = await toolkit.execute(toolCallPart);
 const results = await toolkit.executeAll(toolCallParts);
+
+// 执行选项
+const result = await toolkit.execute(toolCallPart, {
+  signal: abortController.signal,
+  errorPolicy: "return_to_model", // 或 "throw"
+});
 ```
 
 #### MCP 集成
@@ -286,25 +350,33 @@ for await (const chunk of stream) {
 }
 
 const finalEvents = parser.finish(); // TEXT_DONE, THINKING_DONE, MESSAGE_DONE
+
+// 已组装的消息快照
+parser.snapshot;         // 当前 Message
+parser.finishReason;     // "stop" | "tool_calls" | ...
 ```
 
 #### 事件类型
 
-| 事件                   | 说明      |
-| -------------------- | ------- |
-| `THINKING_DELTA`     | 思考/推理增量 |
-| `THINKING_DONE`      | 思考完成    |
-| `TEXT_DELTA`         | 文本增量    |
-| `TEXT_DONE`          | 文本完成    |
-| `TOOL_CALL_START`    | 工具调用开始  |
-| `TOOL_CALL_DELTA`    | 工具参数增量  |
-| `TOOL_CALL_DONE`     | 工具调用完成  |
-| `TOOL_EXECUTE_START` | 工具执行开始  |
-| `TOOL_EXECUTE_DONE`  | 工具执行完成  |
-| `MESSAGE_DONE`       | 消息组装完成  |
-| `TURN_START`         | 新一轮循环开始 |
-| `TURN_END`           | 一轮循环结束  |
-| `ERROR`              | 错误      |
+| 事件                       | 说明      |
+| ------------------------ | ------- |
+| `THINKING_DELTA`         | 思考/推理增量 |
+| `THINKING_DONE`          | 思考完成    |
+| `TEXT_DELTA`             | 文本增量    |
+| `TEXT_DONE`              | 文本完成    |
+| `TOOL_CALL_START`        | 工具调用开始  |
+| `TOOL_CALL_DELTA`        | 工具参数增量  |
+| `TOOL_CALL_DONE`         | 工具调用完成  |
+| `TOOL_APPROVAL_REQUIRED` | 工具需要审批  |
+| `TOOL_APPROVAL_ACCEPTED` | 审批通过    |
+| `TOOL_APPROVAL_REJECTED` | 审批拒绝    |
+| `TOOL_EXECUTE_START`     | 工具执行开始  |
+| `TOOL_EXECUTE_DONE`      | 工具执行完成  |
+| `TOOL_EXECUTE_ERROR`     | 工具执行失败  |
+| `MESSAGE_DONE`           | 消息组装完成  |
+| `TURN_START`             | 新一轮循环开始 |
+| `TURN_END`               | 一轮循环结束  |
+| `ERROR`                  | 错误      |
 
 ### 📝 PromptBuilder — 提示词构建器
 
@@ -320,7 +392,7 @@ builder.injectSystem(Rule.top().after(), "当前时间：2025年7月16日");
 builder.injectSystem(
   Rule.byRole(Role.User).last().before(),
   "请用英文回复",
-  3// life = 3
+  3 // life = 3
 );
 
 // 概率触发（50%概率注入）
@@ -330,19 +402,54 @@ builder.injectSystem(
   { life: -1, probability: 0.5 }
 );
 
+// 带优先级的注入
+builder.injectSystem(
+  Rule.top().after(),
+  "高优先级内容",
+  { life: -1, priority: 0 } // 越小越先执行
+);
+
 // 构建最终上下文
 const context = builder.build(session.history());
 // 原始 session 不受影响
+```
+
+#### 数组操作管线
+
+除了声明式注入，还支持对消息数组进行管线操作：
+
+```typescript
+// 过滤、截取、自由变换
+builder
+  .filter((msg) => msg.role !== Role.Tool, "remove-tool")  // 按条件过滤
+  .slice(-10, undefined, "keep-recent")                     // 只保留最近10条
+  .removeWhere((msg) => msg.hasTag("temp"), "clean-temp")   // 移除临时消息
+  .map((msg) => { /* 变换 */ return msg; }, "transform")     // 映射变换
+  .transform((msgs) => { /* 自由变换 */ return msgs; });       // 完全自定义
+
+// 按标签管理操作
+builder.removeOperation("remove-tool"); // 移除指定操作
+builder.clearOperations();               // 清空所有操作
+```
+
+#### 构建策略
+
+```typescript
+// batch（默认）：所有 Injection 基于原始 history 定位
+builder.build(history, { strategy: "batch" });
+
+// immediate：后续 Injection 可看到前序 Injection 的插入结果
+builder.build(history, { strategy: "immediate" });
 ```
 
 #### Rule — 声明式定位规则
 
 ```typescript
 // 位置定位
-Rule.top().after()// 第一条之后
-Rule.bottom().before()          // 最后一条之前
-Rule.index(2).after()           // 第3条之后
-Rule.index(-1).before()         // 倒数第1条之前
+Rule.top().after()                  // 第一条之后
+Rule.bottom().before()              // 最后一条之前
+Rule.index(2).after()               // 第3条之后
+Rule.index(-1).before()             // 倒数第1条之前
 
 // 角色定位
 Rule.byRole(Role.User).last().before()     // 最后一条 User 之前
@@ -370,19 +477,24 @@ Rule.byRole(Role.System).first().offset(1).after()
 
 ```typescript
 // life = -1  → 永久
-// life = N   → 剩余N次，每次build后递减
+// life = N   → 剩余N次，每次 build 后递减
 // life = 0   → 已过期，跳过
 
 const inj = builder.inject(rule, message, { life: 5, probability: 0.8 });
 
-inj.enabled;      // 手动开关
+inj.enabled;       // 手动开关
 inj.life;          // 剩余次数
 inj.isActive;      // 存活且启用
 inj.probability;   // 触发概率
 
-builder.disable(inj);   // 暂停（不消耗life）
+builder.disable(inj);   // 暂停（不消耗 life）
 builder.enable(inj);    // 恢复
 builder.prune();         // 清理过期注入
+
+// 查询
+builder.aliveCount;      // 存活注入数
+builder.activeCount;     // 活跃注入数
+builder.expiredCount;    // 过期注入数
 ```
 
 ### ⚙️ RequestConfig — 请求参数配置器
@@ -424,22 +536,27 @@ RequestConfig（最低） → requestOptions → run()的 options（最高）
 
 ```typescript
 const agent = new Agent({
-  client,// OpenAI 兼容客户端
-  model: "gpt-4o",               // 模型名
-  session: Session.create("..."), // 会话
-  toolkit,                        // 工具包（可选）
-  promptBuilder,                  // 提示词构建器（可选）
+  client,                           // OpenAI 兼容客户端
+  model: "gpt-4o",                  // 模型名
+  session: Session.create("..."),   // 会话
+  toolkit,                          // 工具包（可选）
+  promptBuilder,                    // 提示词构建器（可选）
   config: RequestConfig.balanced(), // 请求配置（可选）
-  adapter: new OpenAIAdapter(),   // 适配器（可选，默认OpenAI）
-  maxTurns: 10,                   // 最大循环轮次（可选）
+  adapter: new OpenAIAdapter(),     // 适配器（可选，默认 OpenAI）
+  maxTurns: 10,                     // 最大循环轮次（可选）
+  toolApproval: async (req) => {    // 工具审批（可选）
+    return confirm(`允许执行 ${req.name}?`);
+  },
+  toolErrorPolicy: "return_to_model", // 工具错误策略（可选）
 });
 
-// 事件监听
+// 事件监听（类型安全）
 agent
   .on(StreamEventType.THINKING_DELTA, (e) => { /* 思考增量 */ })
   .on(StreamEventType.TEXT_DELTA, (e) => { /* 文本增量 */ })
   .on(StreamEventType.TOOL_CALL_START, (e) => { /* 工具调用 */ })
-  .on(StreamEventType.TOOL_EXECUTE_DONE, (e) => { /* 工具结果 */ });
+  .on(StreamEventType.TOOL_EXECUTE_DONE, (e) => { /* 工具结果 */ })
+  .on(StreamEventType.TOOL_APPROVAL_REQUIRED, (e) => { /* 等待审批 */ });
 
 // 运行
 const reply = await agent.run("你好");
@@ -449,157 +566,160 @@ reply.usage;      // Token 用量
 reply.toolCalls;  // 工具调用
 ```
 
+#### 多种运行方式
+
+```typescript
+// 标准运行
+const reply = await agent.run("你好");
+
+// 传入任意消息运行
+const reply = await agent.runWith(Message.user("你好").addImage("photo.jpg"));
+
+// 直接传入消息列表运行（不走 Session）
+const reply = await agent.runRaw(messages);
+
+// 运行选项
+const reply = await agent.run("你好", {
+  signal: abortController.signal,  // 中断信号
+  timeoutMs: 30000,                // 超时时间
+});
+```
+
+#### 中断与恢复
+
+```typescript
+// 中断
+agent.abort("用户取消");
+
+// 恢复运行
+if (agent.canResume) {
+  const reply = await agent.resume();
+}
+
+// 继续对话（自动判断恢复或继续）
+const reply = await agent.continue({ prompt: "继续" });
+```
+
+#### 工具审批
+
+```typescript
+// 方式一：自动审批（handler 函数）
+agent.setToolApproval(async (req) => {
+  if (req.name === "dangerous_tool") return false;
+  return true;
+});
+
+// 方式二：手动审批模式
+agent.setToolApprovalMode("manual");
+agent.on(StreamEventType.TOOL_APPROVAL_REQUIRED, (e) => {
+  // 外部 UI 展示审批请求
+  showApprovalDialog(e.approvalId, e.name);
+});
+// 用户操作后
+agent.approve(approvalId);
+agent.reject(approvalId, "不允许");
+```
+
 #### 自动循环
 
 `agent.run()` 自动完成：
 
 ```
-用户输入 → Session.addUser→PromptBuilder.build (注入)
-         → Adapter.serialize (序列化)
+用户输入 → Session.addUser
+         → PromptBuilder.build（注入）
+         → Adapter.serialize（序列化）
          → LLM 流式调用
          → StreamParser 解析
-         → 有tool_calls? → ToolKit.execute → 结果回传→ 再次调用 LLM
+         → 有 tool_calls?
+             → 工具审批（auto / manual / handler）
+             → ToolKit.execute → 结果回传 → 再次调用 LLM
          → 无 tool_calls → Session.addAssistant → 返回结果
 ```
 
 ---
 
-## 🔌Adapter — 适配器
+## 🔌 Adapter — 适配器
 
 通过实现 `MessageAdapter` 接口适配不同 API 平台：
 
 ```typescript
 interface MessageAdapter {
-  serialize(messages: Message[]): Promise<SerializedResult>;
+  readonly capabilities?: AdapterCapabilities;
+  serialize(messages: Message[], options?: SerializeOptions): Promise<SerializedResult>;
   deserialize(raw: unknown): Message;
 }
 ```
 
-内置 `OpenAIAdapter`，支持所有 OpenAI 兼容 API：
+### 内置适配器
 
-| 平台              | 支持  |
-| --------------- |:---:|
-| OpenAI          | ✅   |
-| DeepSeek        | ✅   |
-| 通义千问 (Qwen)     | ✅   |
-| Kimi (Moonshot) | ✅   |
-| GLM (智谱)        | ✅   |
-| MiniMax         | ✅   |
-| Claude (兼容模式)   | ✅   |
-| Gemini (兼容模式)   | ✅   |
+| 平台               | 适配器                | 说明                  |
+| ---------------- | ------------------ | ------------------- |
+| OpenAI           | `OpenAIAdapter`    | 支持所有 OpenAI 兼容 API  |
+| DeepSeek         | `OpenAIAdapter`    | OpenAI 兼容           |
+| 通义千问 (Qwen)      | `OpenAIAdapter`    | OpenAI 兼容           |
+| Kimi (Moonshot)  | `OpenAIAdapter`    | OpenAI 兼容           |
+| GLM (智谱)         | `OpenAIAdapter`    | OpenAI 兼容           |
+| MiniMax          | `OpenAIAdapter`    | OpenAI 兼容           |
+| Anthropic Claude | `AnthropicAdapter` | 原生 Claude API 适配    |
+| Google Gemini    | `GeminiAdapter`    | 原生 Gemini API 适配    |
 
-### 思考内容兼容
+### 思考内容序列化
 
-自动识别不同模型的思考字段：
+通过 `SerializeOptions.thinking` 控制思考内容的回传方式：
+
+```typescript
+await agent.run("你好", {
+  serializeOptions: {
+    thinking: {
+      mode: "auto",    // "none" | "native" | "message" | "auto"
+      scope: "last",   // "none" | "last" | "tool_call" | "all"
+    }
+  }
+});
+```
+
+各模型思考字段兼容：
 
 | 模型                | 字段名                 | 支持  |
 | ----------------- | ------------------- |:---:|
 | DeepSeek Reasoner | `reasoning_content` | ✅   |
 | Qwen (思考模式)       | `reasoning_content` | ✅   |
-| Claude (thinking) | `thinking`          | ✅   |
+| Claude (thinking) | `thinking` block    | ✅   |
+| Gemini (thinking) | `thought: true`     | ✅   |
 
 ---
 
-## 🎮 Demo
-
-项目包含一个精灵对战Demo，展示 AgentEngine 的实际应用：
-
-```bash
-npx tsx demo/server.ts
-```
-
-访问 `http://localhost:3000`，特性：
-
-- 🎯 6 种属性精灵，属性克制系统
-- 🤖 AI 对手由 Agent驱动，实时展示思考过程和工具调用
-- 🎨 SVG 精灵 +碰撞动画
-- 📋 在线获取模型列表 + 搜索选择
-- 🌐 局域网可分享
-
----
-
-## 📂 项目结构
+## 📂 模块结构
 
 ```
-src/
-├── message/
-│   ├── Message.ts          # 统一消息模型（树结构）
-│   ├── MessagePart.ts      # 消息内容原子单元
-│   ├── Role.ts             # 角色枚举
-│   └── Usage.ts            # Token 用量统计
-├── adapter/
-│   ├── MessageAdapter.ts   # 适配器接口
-│   └── OpenAIAdapter.ts    # OpenAI 适配器
-├── media/
-│   ├── MediaResolver.ts    # 媒体解析器接口
-│   └── DefaultMediaResolver.ts
-├── session/
-│   ├── Session.ts          # 会话管理器
-│   ├── Inserter.ts         # 命令式插入器
-│   ├── Query.ts            # 查询系统
-│   ├── Paginator.ts        # 分支分页器
-│   ├── SearchCriteria.ts   # 搜索条件
-│   └── matchUtils.ts       # 匹配工具函数
-├── tool/
-│   ├── Tool.ts             # 工具定义（Builder）
-│   ├── ToolCall.ts         # 工具调用实例
-│   ├── ToolKit.ts          # 工具包管理器
-│   ├── McpToolAdapter.ts   # MCP 适配器
-│   ├── Param.ts            # 参数定义
-│   ├── Hook.ts             # 生命周期钩子
-│   ├── Context.ts          # 钩子上下文
-│   └── ValueType.ts        # JSON Schema 类型
-├── stream/
-│   ├── StreamEvent.ts      # 流式事件定义
-│   └── StreamParser.ts     # 流式解析器
-├── prompt/
-│   ├── Rule.ts             # 声明式定位规则
-│   ├── Injection.ts        # 注入实例
-│   └── PromptBuilder.ts    # 提示词构建器
-├── config/
-│   └── RequestConfig.ts    # 请求参数配置器
-├── agent/
-│   └── Agent.ts            # 智能体
-└── index.ts                # 统一导出
-
-demo/
-├── server.ts               # Demo 服务器
-├── game.ts                 # 精灵对战引擎
-└── index.html              # 前端页面
-
-test/
-├── agent_test.ts           # Agent 测试
-├── session_test.ts         # Session 测试
-├── prompt_test.ts          # PromptBuilder 测试
-├── config_test.ts          # RequestConfig 测试
-├── mcp_test.ts             # MCP 集成测试
-├── multimodal_test.ts      # 多模态测试
-├── full_test.ts            # 全模型交互测试
-└── ...
+@notic/agent-engine
+├── message/          统一消息模型（树结构 + 多模态 + 序列化）
+├── adapter/          消息序列化适配器（OpenAI / Anthropic / Gemini）
+├── media/            媒体资源懒加载解析器
+├── session/          会话管理（树结构 + 分支 + 分页 + 插入器 + 查询）
+├── tool/             工具系统（Builder + 生命周期钩子 + MCP + 审批）
+├── stream/           流式解析器（纯函数 + 结构化事件）
+├── prompt/           提示词构建器（声明式注入 + 数组操作管线）
+├── config/           请求参数配置器（预设 + 链式构建）
+├── agent/            智能体编排层（串联一切 + 自动循环 + 中断恢复）
+└── utils/            工具函数
 ```
 
 ---
 
-## 🛠️ 开发
+## 📖 API 文档
 
-```bash
-# 编译
-npm run build
-
-# 类型检查
-npx tsc --noEmit
-
-# 运行测试
-npx tsx test/prompt_test.ts
-npx tsx test/config_test.ts
-npx tsx test/agent_test.ts
-
-# 启动 Demo
-npx tsx demo/server.ts
-```
+完整的 API 参考文档请查看 [docs/API.md](./docs/API.md)。
 
 ---
 
-##📄 License
+## 🌍 环境要求
 
-Private —暂不公开。
+- Node.js >= 18.0.0
+- TypeScript >= 5.5（推荐）
+
+---
+
+## 📄 License
+
+[Apache-2.0](./LICENSE)

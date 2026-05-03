@@ -4,5 +4,11 @@ export { Hook } from "./Hook";
 export { Context } from "./Context";
 export { Tool, ToolFunction, HookHandler, ToolSchema } from "./Tool";
 export { ToolCall } from "./ToolCall";
-export { ToolKit, McpClientLike } from "./ToolKit";
+export {
+    ToolKit,
+    McpClientLike,
+    ToolExecutionOptions,
+    ToolErrorPolicy,
+    ToolExecutionError,
+} from "./ToolKit";
 export { McpToolAdapter } from "./McpToolAdapter";

@@ -1,15 +1,6 @@
 import { Message } from "../message/Message";
 import { Rule } from "./Rule";
-
-/** 生成唯一ID */
-function generateInjectionId(): string {
-  return (
-    "inj-" +
-    Date.now().toString(36) +
-    "-" +
-    Math.random().toString(36).slice(2, 8)
-  );
-}
+import { generateId } from "../utils";
 
 /**
  * 注入实例— Rule + Message +生命周期 的绑定
@@ -41,11 +32,14 @@ export class Injection {
   /** 触发概率（0~1），默认 1 表示必定触发 */
   private _probability: number = 1;
 
+  /** 执行优先级：数值越小越早执行，默认 0 */
+  private _priority: number = 0;
+
   /** 注册顺序（由PromptBuilder 分配） */
   private _sequence: number = 0;
 
   constructor(rule: Rule, message: Message, life: number = -1) {
-    this.id = generateInjectionId();
+    this.id = generateId("inj");
     this.rule = rule;
     this.message = message;
     this._life = life;
@@ -91,9 +85,33 @@ export class Injection {
    * 概率为 0 时必定返回 false
    */
   rollTrigger(): boolean {
-    if (this._probability >=1) return true;
+    if (this._probability >= 1) return true;
     if (this._probability <= 0) return false;
     return Math.random() < this._probability;
+  }
+
+  // ========================
+  //  执行顺序
+  // ========================
+
+  /**
+   * 执行优先级。
+   *
+   * 数值越小越早执行；相同 priority 时按注册顺序执行。
+   * 这只控制 Injection 的执行/定位顺序，不等同于 Rule.order() 的同位置展示顺序。
+   */
+  get priority(): number {
+    return this._priority;
+  }
+
+  set priority(n: number) {
+    this._priority = Number.isFinite(n) ? n : 0;
+  }
+
+  /** 链式设置执行优先级 */
+  setPriority(n: number): this {
+    this.priority = n;
+    return this;
   }
 
   /**

@@ -26,10 +26,27 @@ export class Context {
   /** 取消原因 */
   public cancelReason: string = "";
 
-  constructor(id: string, name: string, args: Record<string, unknown>) {
+  /** 中断信号：用于工具内部响应 Agent abort / timeout */
+  public signal?: AbortSignal;
+
+  constructor(
+    id: string,
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal
+  ) {
     this.id = id;
     this.name = name;
     this.arguments = args;
+    this.signal = signal;
+  }
+
+  /** 如果已中断则抛出中断原因 */
+  throwIfAborted(): void {
+    if (!this.signal?.aborted) return;
+    const reason = (this.signal as AbortSignal & { reason?: unknown }).reason;
+    if (reason instanceof Error) throw reason;
+    throw new Error(reason !== undefined ? String(reason) : "Tool execution aborted");
   }
 
   /** 取消执行的便捷方法 */

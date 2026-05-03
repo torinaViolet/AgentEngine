@@ -16,17 +16,21 @@ export class ToolCall {
   public readonly arguments: Record<string, unknown>;
 
   private _template: Tool;
+  private _signal?: AbortSignal;
   private _result?: unknown;
   private _executed: boolean = false;
   private _error?: Error;
+  private _ctx?: Context;
 
   constructor(
     template: Tool,
     id: string,
     name: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    signal?: AbortSignal
   ) {
     this._template = template;
+    this._signal = signal;
     this.id = id;
     this.name = name;
     this.arguments = args;
@@ -37,19 +41,22 @@ export class ToolCall {
   // ========================
 
   async execute(): Promise<unknown> {
-    const ctx = this.makeContext();
+    const ctx = this.getOrCreateContext();
+    ctx.throwIfAborted();
 
     //---- BEFORE_EXECUTE ----
     this._template.fire(Hook.BEFORE_EXECUTE, ctx);
+    ctx.throwIfAborted();
     if (ctx.cancelled) {
       throw new Error(`执行被取消: ${ctx.cancelReason}`);
     }
 
     // ---- execute ----
     try {
-      this._result = await this._template.func(ctx.arguments);
+      this._result = await this._template.func(ctx.arguments, ctx);
+      ctx.throwIfAborted();
       ctx.result = this._result;
-this._executed = true;
+      this._executed = true;
 
       // ---- AFTER_EXECUTE ----
       this._template.fire(Hook.AFTER_EXECUTE, ctx);
@@ -82,7 +89,7 @@ this._executed = true;
    * 将执行结果序列化为 Message.tool()，回传给 LLM
    */
   toMessage(): Message {
-    const ctx = this.makeContext();
+    const ctx = this.getOrCreateContext();
     ctx.result = this._result;
 
     // ---- ON_SERIALIZE ----
@@ -119,7 +126,17 @@ this._executed = true;
   //  内部辅助
   // ========================
 
-  private makeContext(): Context {
-    return new Context(this.id, this.name, { ...this.arguments });
+  /**
+   * 获取或创建 Context
+   *
+   * 首次调用创建新的 Context 并缓存，后续调用复用同一实例，
+   * 确保 BEFORE_EXECUTE → execute → AFTER_EXECUTE → ON_SERIALIZE
+   * 整个生命周期共享同一个 Context。
+   */
+  private getOrCreateContext(): Context {
+    if (!this._ctx) {
+      this._ctx = new Context(this.id, this.name, { ...this.arguments }, this._signal);
+    }
+    return this._ctx;
   }
 }

@@ -1,0 +1,27 @@
+# 源代码（发布 dist 编译产物即可）
+src/
+
+# 测试和 Demo
+test/
+demo/
+
+# 文档（非 README）
+docs/
+
+# 配置文件
+tsconfig.json
+.gitignore
+.continue/
+
+# 开发产物
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+
+# 系统文件
+.DS_Store
+.idea/
+.vscode/
+
+# 锁文件
+package-lock.json

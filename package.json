@@ -1,20 +1,72 @@
 {
-  "name": "AgentEngine",
+  "name": "@notic/agent-engine",
   "version": "1.0.0",
-  "description": "",
+  "description": "A lightweight, elegant, and feature-complete TypeScript AI Agent framework",
   "main": "dist/index.js",
-  "scripts": {
-    "build": "tsc"
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
-    "openai": "^6.34.0",
-    "zod": "^4.3.6"
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "openai",
+    "chatgpt",
+    "gpt",
+    "claude",
+    "gemini",
+    "deepseek",
+    "mcp",
+    "tool-calling",
+    "streaming",
+    "typescript",
+    "framework"
+  ],
+  "author": "notic",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "homepage": "",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.0.0",
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "@types/node": "^25.6.0",
-    "typescript": "^5.5.3"
-  },
-  "private": true
+    "openai": "^6.34.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.5.3",
+    "zod": "^4.3.6"
+  }
 }

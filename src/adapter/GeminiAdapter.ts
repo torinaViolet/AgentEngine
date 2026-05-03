@@ -1,0 +1,379 @@
+import { Message } from "../message/Message";
+import { Role } from "../message/Role";
+import { Usage } from "../message/Usage";
+import {
+  MessagePart,
+  ImagePart,
+  FilePart,
+  AudioPart,
+} from "../message/MessagePart";
+import { MediaResolver } from "../media/MediaResolver";
+import { DefaultMediaResolver } from "../media/DefaultMediaResolver";
+import {
+  MessageAdapter,
+  SerializedResult,
+  SerializeOptions,
+  normalizeThinkingOptions,
+  shouldSerializeThinking,
+} from "./MessageAdapter";
+
+/**
+ * Google Gemini 消息适配器
+ *
+ * 将统一 Message 模型转换为 Gemini API 格式：
+ * - System 消息提取到顶层 system_instruction
+ * - 角色映射：assistant → model, user → user
+ * - Content 使用 parts 数组（text / inline_data / functionCall / functionResponse）
+ * - 思考内容使用 thought: true标记的text part
+ * - Tool 结果使用 functionResponse part
+ *
+ * 用法:
+ *   const adapter = new GeminiAdapter();
+ *   const { messages, systemMessage } = await adapter.serialize(history);
+ *   // systemMessage → 传给Gemini API 的 system_instruction
+ *  // messages → 传给 Gemini API 的 contents参数
+ */
+export class GeminiAdapter implements MessageAdapter {
+  readonly capabilities = {
+    nativeThinking: true,
+    messageThinking: true,
+  };
+
+  private resolver: MediaResolver;
+
+  constructor(resolver?: MediaResolver) {
+    this.resolver = resolver || new DefaultMediaResolver();
+  }
+
+  // ========================
+  //  Serialize: Message[] → Gemini JSON
+  // ========================
+
+  async serialize(messages: Message[], options?: SerializeOptions): Promise<SerializedResult> {
+    const thinkingOptions = normalizeThinkingOptions(options, this.capabilities);
+    const systemParts: string[] = [];
+    const serialized: unknown[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      const includeThinking = shouldSerializeThinking(msg, i, messages, thinkingOptions);
+      if (msg.role === Role.System) {
+        // System 消息提取到顶层 system_instruction
+        const text = msg.text;
+        if (text) systemParts.push(text); continue;
+      }
+
+      if (msg.role === Role.Tool) {
+        serialized.push(this.serializeToolMessage(msg));
+        continue;
+      }
+
+      if (msg.role === Role.Assistant) {
+        serialized.push(await this.serializeModelMessage(msg, includeThinking, thinkingOptions.mode, thinkingOptions.messagePrefix));
+        continue;
+      }
+
+      if (msg.role === Role.User) {
+        serialized.push(await this.serializeUserMessage(msg));
+        continue;
+      }
+    }
+
+    // Gemini 要求 user/model 交替，合并连续同角色消息
+    const merged = this.mergeConsecutiveRoles(serialized);
+
+    return {
+      messages: merged,
+      systemMessage:
+        systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    };
+  }
+
+  // ---- Model (Assistant)消息 ----
+
+  private async serializeModelMessage(
+    msg: Message,
+    includeThinking: boolean,
+    thinkingMode: "none" | "native" | "message",
+    thinkingPrefix: string
+  ): Promise<unknown> {
+    const parts: unknown[] = [];
+
+    for (const part of msg.parts) {
+      switch (part.type) {
+        case "thinking":
+          if (!includeThinking) break;
+          if (thinkingMode === "native") {
+            parts.push({
+              text: part.text,
+              thought: true,
+            });
+          } else if (thinkingMode === "message") {
+            parts.push({ text: `${thinkingPrefix}${part.text}` });
+          }
+          break;
+        case "text":
+          if (part.text) {
+            parts.push({ text: part.text });
+          }
+          break;
+        case "tool_call":
+          parts.push({
+            functionCall: {
+              name: part.name,
+              args: this.safeParseJson(part.arguments),
+            },
+          });
+          break;
+        default:
+          break;
+      }
+    }
+
+    return {
+      role: "model",
+      parts: parts.length > 0 ? parts : [{ text: "" }],
+    };
+  }
+
+  // ---- User 消息 ----
+
+  private async serializeUserMessage(msg: Message): Promise<unknown> {
+    const parts: unknown[] = [];
+
+    for (const part of msg.parts) {
+      switch (part.type) {
+        case "text":
+          parts.push({ text: part.text });
+          break;
+        case "image":
+          parts.push(await this.serializeInlineData(part));
+          break;
+        case "audio":
+          parts.push(await this.serializeInlineData(part));
+          break;
+        case "file":
+          parts.push(await this.serializeFilePart(part));
+          break;
+        default:
+          break;
+      }
+    }
+
+    return {
+      role: "user",
+      parts: parts.length > 0 ? parts : [{ text: "" }],
+    };
+  }
+
+  // ---- Tool 消息 → user role with functionResponse ----
+
+  private serializeToolMessage(msg: Message): unknown {
+    const toolResult = msg.parts.find((p) => p.type === "tool_result");
+    if (!toolResult || toolResult.type !== "tool_result") {
+      throw new Error("Tool message must contain a tool_result part");
+    }
+
+    return {
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            name: msg.metadata.toolName || "unknown",
+            response: this.safeParseJson(toolResult.result),
+          },
+        },
+      ],
+    };
+  }
+
+  // ---- 媒体序列化 ----
+
+  private async serializeInlineData(
+    part: ImagePart | AudioPart
+  ): Promise<unknown> {
+    if (part.url.startsWith("http://") || part.url.startsWith("https://")) {
+      return {
+        fileData: {
+          mimeType: part.mimeType || this.guessMimeType(part.url),
+          fileUri: part.url,
+        },
+      };
+    }
+
+    const resolved = await this.resolver.resolve(part.url);
+    return {
+      inlineData: {
+        mimeType: part.mimeType || resolved.mimeType,
+        data: resolved.base64,
+      },
+    };
+  }
+
+  private async serializeFilePart(part: FilePart): Promise<unknown> {
+    if (part.url.startsWith("http://") || part.url.startsWith("https://")) {
+      return {
+        fileData: {
+          mimeType: part.mimeType || this.guessMimeType(part.url),
+          fileUri: part.url,
+        },
+      };
+    }
+
+    const resolved = await this.resolver.resolve(part.url);
+    const mime = part.mimeType || resolved.mimeType;
+
+    // 文本文件直接嵌入
+    if (mime.startsWith("text/") || mime === "application/json") {
+      const text = Buffer.from(resolved.base64, "base64").toString("utf-8");
+      const label = part.fileName || "file";
+      return { text: `[File: ${label}]\n${text}` };
+    }
+
+    return {
+      inlineData: {
+        mimeType: mime,
+        data: resolved.base64,
+      },
+    };
+  }
+
+  // ========================
+  //  Deserialize: Gemini Response → Message
+  // ========================
+
+  deserialize(raw: unknown): Message {
+    const data = raw as Record<string, unknown>;
+
+    // Gemini candidate 结构
+    const content = (data.content || data) as Record<string, unknown>;
+    const role = content.role as string;
+
+    if (role === "model") {
+      const parts: MessagePart[] = [];
+      const geminiParts = content.parts as Array<Record<string, unknown>> | undefined;
+
+      if (Array.isArray(geminiParts)) {
+        for (const gPart of geminiParts) {
+          if (gPart.thought && gPart.text) {
+            // 思考内容
+            parts.push({ type: "thinking", text: gPart.text as string });
+          } else if (gPart.text !== undefined) {
+            // 普通文本
+            if (gPart.text) {
+              parts.push({ type: "text", text: gPart.text as string });
+            }
+          } else if (gPart.functionCall) {
+            // 工具调用
+            const fc = gPart.functionCall as Record<string, unknown>;
+            parts.push({
+              type: "tool_call",
+              toolCallId: (fc.name as string) + "_" + Date.now(),
+              name: fc.name as string,
+              arguments: JSON.stringify(fc.args || {}),
+            });
+          }
+        }
+      }
+
+      return new Message(Role.Assistant, parts);
+    }
+
+    // 其他角色
+    const geminiParts = (content.parts as Array<Record<string, unknown>>) || [];
+    const text = geminiParts
+      .filter((p) => p.text !== undefined)
+      .map((p) => p.text as string)
+      .join("");
+
+    return new Message(Role.User, [{ type: "text", text }]);
+  }
+
+  /**
+   * 从完整的 Gemini API 响应解析
+   */
+  deserializeResponse(raw: unknown): Message {
+    const data = raw as Record<string, unknown>;
+
+    // Gemini 响应结构: { candidates: [{ content: { ... } }], usageMetadata: { ... } }
+    const candidates = data.candidates as Array<Record<string, unknown>> | undefined;
+    const candidate = candidates?.[0];
+    if (!candidate) {
+      throw new Error("Gemini API 响应中没有 candidates");
+    }
+
+    const message = this.deserialize(candidate);
+
+    if (data.modelVersion) {
+      message.model = data.modelVersion as string;
+    }
+
+    if (data.usageMetadata) {
+      const usage = data.usageMetadata as Record<string, number>;
+      message.usage = new Usage(
+        usage.promptTokenCount || 0,
+        usage.candidatesTokenCount || usage.totalTokenCount || 0,
+        usage.totalTokenCount || 0
+      );
+    }
+
+    return message;
+  }
+
+  // ========================
+  //  辅助
+  // ========================
+
+  /**
+   * 合并连续同角色消息
+   *
+   * Gemini 要求 user/model 交替出现
+   */
+  private mergeConsecutiveRoles(messages: unknown[]): unknown[] {
+    if (messages.length === 0) return messages;
+
+    interface SerializedMessage {
+      role: string;
+      parts: unknown[];
+    }
+
+    const merged: SerializedMessage[] = [];
+    for (const raw of messages) {
+      const msg = raw as SerializedMessage;
+      const last = merged[merged.length - 1];
+      if (last && last.role === msg.role) {
+        // 合并 parts 数组
+        last.parts = [...(last.parts || []), ...(msg.parts || [])];
+      } else {
+        merged.push({ ...msg });
+      }
+    }
+    return merged;
+  }
+
+  private safeParseJson(jsonStr: string): unknown {
+    try {
+      return JSON.parse(jsonStr);
+    } catch {
+      return {};
+    }
+  }
+
+  private guessMimeType(url: string): string {
+    const ext = url.split(".").pop()?.toLowerCase() || "";
+    const map: Record<string, string> = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      webp: "image/webp",
+      svg: "image/svg+xml",
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      ogg: "audio/ogg",
+      mp4: "video/mp4",
+      pdf: "application/pdf",
+    };
+    return map[ext] || "application/octet-stream";
+  }
+}

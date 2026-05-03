@@ -3,6 +3,30 @@ import { ToolCall } from "./ToolCall";
 import { ToolCallPart } from "../message/MessagePart";
 import { Message } from "../message/Message";
 
+export type ToolErrorPolicy = "return_to_model" | "throw";
+
+export class ToolExecutionError extends Error {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly cause?: unknown;
+
+  constructor(toolCallId: string, toolName: string, cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(`工具执行失败 [${toolName}]: ${message}`);
+    this.name = "ToolExecutionError";
+    this.toolCallId = toolCallId;
+    this.toolName = toolName;
+    this.cause = cause;
+  }
+}
+
+export interface ToolExecutionOptions {
+  /** 中断信号：传入 Tool Context，供工具内部响应取消 */
+  signal?: AbortSignal;
+  /** 工具错误策略：默认 return_to_model */
+  errorPolicy?: ToolErrorPolicy;
+}
+
 /**
  * 工具包管理器
  *
@@ -91,7 +115,10 @@ export class ToolKit {
    *
    * ToolCallPart(数据) → ToolCall(行为) → execute → Message(数据)
    */
-  async execute(toolCallPart: ToolCallPart): Promise<Message> {
+  async execute(
+    toolCallPart: ToolCallPart,
+    options?: ToolExecutionOptions
+  ): Promise<Message> {
     const tool = this._tools.get(toolCallPart.name);
     if (!tool) {
       //工具不存在，返回错误消息
@@ -102,11 +129,15 @@ export class ToolKit {
     }
 
     const args = this.parseArguments(toolCallPart.arguments);
-    const call = tool.create(toolCallPart.toolCallId, args);
+    const call = tool.create(toolCallPart.toolCallId, args, options?.signal);
 
     try {
       await call.execute();
     } catch (e) {
+      if (options?.errorPolicy === "throw") {
+        throw new ToolExecutionError(toolCallPart.toolCallId, toolCallPart.name, e);
+      }
+
       // 执行失败，返回错误消息
       const errorMsg = e instanceof Error ? e.message : String(e);
       return Message.tool(
@@ -121,8 +152,11 @@ export class ToolKit {
   /**
    * 并行执行多个 ToolCallPart
    */
-  async executeAll(toolCallParts: ToolCallPart[]): Promise<Message[]> {
-    return Promise.all(toolCallParts.map((part) => this.execute(part)));
+  async executeAll(
+    toolCallParts: ToolCallPart[],
+    options?: ToolExecutionOptions
+  ): Promise<Message[]> {
+    return Promise.all(toolCallParts.map((part) => this.execute(part, options)));
   }
 
   // ========================

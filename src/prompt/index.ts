@@ -1,3 +1,9 @@
 export { Rule } from "./Rule";
 export { Injection } from "./Injection";
-export { PromptBuilder, InjectOptions } from "./PromptBuilder";
+export {
+    PromptBuilder,
+    InjectOptions,
+    BuildOptions,
+    BuildStrategy,
+    Operation,
+} from "./PromptBuilder";

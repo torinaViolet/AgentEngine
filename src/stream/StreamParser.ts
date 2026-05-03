@@ -2,6 +2,7 @@ import { Message } from "../message/Message";
 import { Role } from "../message/Role";
 import { MessagePart } from "../message/MessagePart";
 import {
+  FinishReason,
   StreamEvent,
   StreamEventType,
 } from "./StreamEvent";
@@ -34,6 +35,7 @@ export class StreamParser {
   private _thinkingBuffer: string = "";
   private _textBuffer: string = "";
   private _toolCalls: Map<number, ToolCallAccumulator> = new Map();
+  private _finishReason?: FinishReason;
   private _finished: boolean = false;
 
   //========================
@@ -51,6 +53,10 @@ export class StreamParser {
       if (!choices || choices.length === 0) return events;
 
       const choice = choices[0];
+      if (choice.finish_reason) {
+        this._finishReason = choice.finish_reason;
+      }
+
       const delta = choice.delta;
       if (!delta) return events;
 
@@ -180,6 +186,7 @@ this._finished = true;
     events.push({
       type: StreamEventType.MESSAGE_DONE,
       message,
+      finishReason: this._finishReason,
     });
 
     return events;
@@ -196,6 +203,18 @@ this._finished = true;
     return this.buildMessage();
   }
 
+  /** 模型完成原因，例如 stop / length / tool_calls */
+  get finishReason(): FinishReason | undefined {
+    return this._finishReason;
+  }
+
+  /** 当前是否已累积任何 assistant 内容 */
+  get hasSnapshotContent(): boolean {
+    return this._thinkingBuffer.length > 0 ||
+      this._textBuffer.length > 0 ||
+      this._toolCalls.size > 0;
+  }
+
   // ========================
   //  重置
   // ========================
@@ -207,6 +226,7 @@ this._finished = true;
     this._thinkingBuffer = "";
     this._textBuffer = "";
     this._toolCalls.clear();
+    this._finishReason = undefined;
     this._finished = false;
   }
 

@@ -30,12 +30,13 @@ export class Usage {
   /**
    * 从OpenAI API 原始响应解析
    */
-  static fromRaw(raw: any): Usage {
+  static fromRaw(raw: unknown): Usage {
     if (!raw) return Usage.zero();
+    const data = raw as Record<string, number>;
     return new Usage(
-      raw.prompt_tokens ?? 0,
-      raw.completion_tokens ?? 0,
-      raw.total_tokens ?? 0
+      data.prompt_tokens ?? 0,
+      data.completion_tokens ?? 0,
+      data.total_tokens ?? 0
     );
   }
 
