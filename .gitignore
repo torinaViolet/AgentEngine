@@ -10,9 +10,8 @@ yarn-error.log*
 
 .vscode/*
 
-#测试和Demo
+# 测试文件
 /test
-/demo
 
 # 构建产物
 /dist

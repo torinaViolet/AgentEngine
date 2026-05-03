@@ -1,0 +1,1625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>精灵对战 — AgentEngine Demo</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #e0e0e0;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /*===== 全局容器 ===== */
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 28px;
+      margin-bottom: 5px;
+      background: linear-gradient(90deg, #f7971e, #ffd200);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      text-align: center;
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 20px;
+    }
+
+    /* ===== 配置面板 ===== */
+    .config-panel {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .config-panel h2 {
+      font-size: 16px;
+      margin-bottom: 12px;
+      color: #ffd200;
+    }
+
+    .config-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .config-row.full {
+      grid-template-columns: 1fr;
+    }
+
+    label {
+      font-size: 12px;
+      color: #aaa;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    input,
+    select {
+      width: 100%;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: #ffd200;
+    }
+
+    /* ===== 精灵选择 ===== */
+    .monster-select {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    .monster-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .monster-card:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: translateY(-2px);
+    }
+
+    .monster-card.selected {
+      border-color: #ffd200;
+      background: rgba(255, 210, 0, 0.1);
+    }
+
+    .monster-card .sprite {
+      width: 60px;
+      height: 60px;
+      margin: 0 auto 6px;
+    }
+
+    .monster-card .name {
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .monster-card .type-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    .monster-card .stats {
+      font-size: 11px;
+      color: #999;
+      margin-top: 4px;
+    }
+
+    .btn {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-block;
+    }
+
+    .btn-primary {
+      background: linear-gradient(90deg, #f7971e, #ffd200);
+      color: #1a1a2e;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(255, 210, 0, 0.3);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-restart {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e0e0e0;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      margin-left: 10px;
+    }
+
+    .btn-rewind {
+      background: rgba(100, 180, 255, 0.15);
+      color: #6cf;
+      border: 1px solid rgba(100, 180, 255, 0.3);
+    }
+
+    .btn-rewind:hover:not(:disabled) {
+      background: rgba(100, 180, 255, 0.25);
+      transform: translateY(-2px);
+    }
+
+    .btn-rewind:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    /* ===== 回溯控制栏 ===== */
+    .rewind-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(100, 180, 255, 0.06);
+      border: 1px solid rgba(100, 180, 255, 0.15);
+      border-radius: 10px;
+      padding: 10px 15px;
+      margin-bottom: 15px;
+      font-size: 13px;
+    }
+
+    .rewind-bar .rewind-label {
+      color: #6cf;
+      font-weight: bold;
+    }
+
+    .rewind-bar .rewind-turn {
+      color: #aaa;
+    }
+
+    .rewind-bar .rewind-turn-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.2);
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-block;
+    }
+
+    .rewind-bar .rewind-turn-dot:hover {
+      background: rgba(100, 180, 255, 0.5);
+      transform: scale(1.3);
+    }
+
+    .rewind-bar .rewind-turn-dot.active {
+      background: #6cf;
+      box-shadow: 0 0 6px rgba(100, 180, 255, 0.5);
+    }
+
+    .rewind-bar .rewind-turn-dot.future {
+      background: rgba(255, 255, 255, 0.08);
+      cursor: default;
+    }
+
+    .rewind-tooltip {
+      position: relative;
+    }
+
+    .rewind-tooltip::after {
+      content: '回溯到上一回合，尝试不同的策略！所有历史分支都会保留。';
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.85);
+      color: #ccc;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      margin-bottom: 6px;
+    }
+
+    .rewind-tooltip:hover::after {
+      opacity: 1;
+    }
+
+    /* ===== 战斗场景 ===== */
+    #battle-scene {
+      display: none;
+    }
+
+    .battle-field {
+      background: linear-gradient(180deg, #1a2a4a 0%, #2a3a5a 40%, #3a5a3a 60%, #2a4a2a 100%);
+      border-radius: 16px;
+      padding: 20px;
+      position: relative;
+      height: 320px;
+      margin-bottom: 15px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .battle-field::before {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 40%;
+      background: linear-gradient(180deg, transparent, rgba(0, 80, 0, 0.2));
+      border-radius: 0 0 16px 16px;
+    }
+
+    /*精灵展示 */
+    .battle-sprite {
+      position: absolute;
+      transition: transform 0.3s;
+    }
+
+    .sprite-enemy {
+      top: 30px;
+      right: 60px;
+    }
+
+    .sprite-player {
+      bottom: 40px;
+      left: 60px;
+    }
+
+    /* HP条 */
+    .hp-bar-container {
+      position: absolute;
+      width: 220px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 10px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .hp-bar-enemy {
+      top: 20px;
+      left: 30px;
+    }
+
+    .hp-bar-player {
+      bottom: 30px;
+      right: 30px;
+    }
+
+    .hp-bar-name {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    .hp-bar-track {
+      height: 10px;
+      background: #333;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .hp-bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      transition: width 0.5s ease, background0.5s;
+    }
+
+    /* 碰撞动画 */
+    @keyframes attackRight {
+      0% {
+        transform: translate(0, 0);
+      }
+
+      30% {
+        transform: translate(180px, -80px) scale(1.1);
+      }
+
+      50% {
+        transform: translate(180px, -80px) scale(1.1);
+      }
+
+      70% {
+        transform: translate(0, 0) scale(1);
+      }
+
+      100% {
+        transform: translate(0, 0);
+      }
+    }
+
+    @keyframes attackLeft {
+      0% {
+        transform: translate(0, 0);
+      }
+
+      30% {
+        transform: translate(-180px, 80px) scale(1.1);
+      }
+
+      50% {
+        transform: translate(-180px, 80px) scale(1.1);
+      }
+
+      70% {
+        transform: translate(0, 0) scale(1);
+      }
+
+      100% {
+        transform: translate(0, 0);
+      }
+    }
+
+    @keyframes hitShake {
+
+      0%,
+      100% {
+        transform: translate(0, 0);
+      }
+
+      20% {
+        transform: translate(-8px, 0);
+      }
+
+      40% {
+        transform: translate(8px, 0);
+      }
+
+      60% {
+        transform: translate(-5px, 0);
+      }
+
+      80% {
+        transform: translate(5px, 0);
+      }
+    }
+
+    @keyframes faintAnim {
+      0% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      100% {
+        opacity: 0;
+        transform: translateY(40px);
+      }
+    }
+
+    .attacking-right {
+      animation: attackRight 0.6s ease;
+    }
+
+    .attacking-left {
+      animation: attackLeft 0.6s ease;
+    }
+
+    .hit-shake {
+      animation: hitShake 0.4s ease;
+    }
+
+    .fainting {
+      animation: faintAnim 0.8s ease forwards;
+    }
+
+    /* 战斗消息 */
+    .battle-message {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 12px 16px;
+      font-size: 14px;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      border-radius: 0 0 16px 16px;
+      backdrop-filter: blur(5px);
+    }
+
+    /* ===== 技能选择 ===== */
+    .moves-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 15px;
+    }
+
+    .move-btn {
+      padding: 12px;
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      color: #fff;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+    }
+
+    .move-btn:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.12);
+      transform: translateY(-1px);
+    }
+
+    .move-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .move-btn .move-name {
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .move-btn .move-info {
+      font-size: 11px;
+      color: #aaa;
+      margin-top: 2px;
+    }
+
+    .move-btn .move-pp {
+      font-size: 11px;
+      color: #888;
+      float: right;
+    }
+
+    /* ===== AI 面板 ===== */
+    .ai-panel {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 15px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .ai-panel h3 {
+      font-size: 14px;
+      color: #ffd200;
+      margin-bottom: 8px;
+    }
+
+    .ai-thinking {
+      font-size: 12px;
+      color: #8888cc;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .ai-text {
+      font-size: 13px;
+      color: #aaddaa;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      margin-top: 8px;
+    }
+
+    .ai-tool {
+      font-size: 12px;
+      color: #dda;
+      background: rgba(255, 220, 0, 0.05);
+      border-left: 3px solid #ffd200;
+      padding: 6px 10px;
+      margin-top: 8px;
+      border-radius: 0 6px 6px 0;
+    }
+
+    .ai-reason {
+      font-size: 13px;
+      color: #ffcc80;
+      font-style: italic;
+      margin-top: 6px;
+    }
+
+    /* ===== 战斗日志 ===== */
+    .battle-log {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+      padding: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+
+    .battle-log .log-entry {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 2px 0;
+    }
+
+    .log-super {
+      color: #ff6b6b;
+      font-weight: bold;
+    }
+
+    .log-resist {
+      color: #69b3ff;
+    }
+
+    .log-crit {
+      color: #ffd700;
+    }
+
+    .log-miss {
+      color: #888;
+      font-style: italic;
+    }
+
+    .log-faint {
+      color: #ff4444;
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    /* ===== 胜负画面 ===== */
+    .result-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(5px);
+    }
+
+    .result-overlay.show {
+      display: flex;
+    }
+
+    .result-box {
+      text-align: center;
+      padding: 40px 60px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      border: 2px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .result-box h2 {
+      font-size: 36px;
+      margin-bottom: 10px;
+    }
+
+    .result-box p {
+      font-size: 16px;
+      color: #aaa;
+      margin-bottom: 20px;
+    }
+
+    .result-win h2 {
+      color: #ffd200;
+    }
+
+    .result-lose h2 {
+      color: #ff4444;
+    }
+
+    /* ===== 属性颜色 ===== */
+    .type-fire {
+      background: #e94;
+      color: #fff;
+    }
+
+    .type-water {
+      background: #39f;
+      color: #fff;
+    }
+
+    .type-grass {
+      background: #5b5;
+      color: #fff;
+    }
+
+    .type-electric {
+      background: #fc3;
+      color: #333;
+    }
+
+    .type-ice {
+      background: #6cf;
+      color: #333;
+    }
+
+    .type-dark {
+      background: #556;
+      color: #fff;
+    }
+
+    .type-normal {
+      background: #aa9;
+      color: #333;
+    }
+
+    .move-border-fire {
+      border-color: #e94;
+    }
+
+    .move-border-water {
+      border-color: #39f;
+    }
+
+    .move-border-grass {
+      border-color: #5b5;
+    }
+
+    .move-border-electric {
+      border-color: #fc3;
+    }
+
+    .move-border-ice {
+      border-color: #6cf;
+    }
+
+    .move-border-dark {
+      border-color: #556;
+    }
+
+    .move-border-normal {
+      border-color: #aa9;
+    }
+
+    /* 滚动条 */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="container">
+    <h1>⚔️ 精灵对战</h1>
+    <p class="subtitle">Powered by AgentEngine — AI驱动的对手</p>
+
+    <!-- ===== 配置面板 ===== -->
+    <div id="setup-scene">
+      <div class="config-panel">
+        <h2>🔑 API 配置</h2>
+        <div class="config-row">
+          <div>
+            <label>API Key</label>
+            <input id="apiKey" type="password" placeholder="sk-..." />
+          </div>
+          <div>
+            <label>Base URL</label>
+            <input id="baseUrl" value="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+          </div>
+          <div style="position:relative;">
+            <label>模型</label>
+            <div style="display:flex;gap:6px;">
+              <input id="model" value="" placeholder="输入或从列表选择" style="flex:1;" />
+              <button class="btn"
+                style="padding:6px 12px;font-size:12px;background:rgba(255,255,255,0.1);color:#ffd200;border:1px solid rgba(255,210,0,0.3);"
+                onclick="fetchModels()" id="btn-fetch-models">📋 获取列表</button>
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="deepseekMode" style="width:auto;" />
+              <label for="deepseekMode" style="margin:0;font-size:13px;color:#ccc;cursor:pointer;">DeepSeek 模式</label>
+              <span style="font-size:11px;color:#888;">（工具调用时回传 reasoning_content，DeepSeek/Qwen 思考模型需开启）</span>
+            </div>
+            <div id="model-dropdown"
+              style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;margin-top:4px;background:#1a1a2e;border:1px solid rgba(255,255,255,0.15);border-radius:8px;max-height:250px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.5);">
+              <div style="padding:6px;border-bottom:1px solid rgba(255,255,255,0.08);">
+                <input id="model-search" placeholder="🔍 搜索模型..."
+                  style="width:100%;padding:6px 10px;font-size:13px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);"
+                  oninput="filterModels()" />
+              </div>
+              <div id="model-list" style="max-height:200px;overflow-y:auto;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-panel">
+        <h2>🎯 选择你的精灵</h2>
+        <div id="player-select" class="monster-select"></div>
+      </div>
+
+      <div class="config-panel">
+        <h2>👾 选择对手精灵</h2>
+        <div id="enemy-select" class="monster-select"></div>
+      </div>
+
+      <div style="text-align:center;">
+        <button id="btn-start" class="btn btn-primary" disabled>⚔️ 开始对战</button>
+      </div>
+    </div>
+
+    <!-- ===== 战斗场景 ===== -->
+    <div id="battle-scene">
+      <div class="battle-field">
+        <!--敌方HP -->
+        <div class="hp-bar-container hp-bar-enemy">
+          <div class="hp-bar-name">
+            <span id="enemy-name">???</span>
+            <span id="enemy-hp-text">100/100</span>
+          </div>
+          <div class="hp-bar-track">
+            <div id="enemy-hp-fill" class="hp-bar-fill" style="width:100%;background:#4caf50;"></div>
+          </div>
+        </div>
+
+        <!-- 敌方精灵 -->
+        <div class="battle-sprite sprite-enemy" id="sprite-enemy"></div>
+
+        <!-- 我方精灵 -->
+        <div class="battle-sprite sprite-player" id="sprite-player"></div>
+
+        <!-- 我方HP -->
+        <div class="hp-bar-container hp-bar-player">
+          <div class="hp-bar-name">
+            <span id="player-name">???</span>
+            <span id="player-hp-text">100/100</span>
+          </div>
+          <div class="hp-bar-track">
+            <div id="player-hp-fill" class="hp-bar-fill" style="width:100%;background:#4caf50;"></div>
+          </div>
+        </div>
+
+        <!-- 消息 -->
+        <div class="battle-message" id="battle-msg">选择技能开始战斗！</div>
+      </div>
+
+      <!-- 技能按钮 -->
+      <div class="moves-panel" id="moves-panel"></div>
+
+      <!-- 回溯控制栏 -->
+      <div class="rewind-bar" id="rewind-bar">
+        <button class="btn btn-rewind rewind-tooltip" id="btn-rewind" disabled onclick="rewindOneTurn()">⏪ 回溯</button>
+        <span class="rewind-label">回合</span>
+        <span class="rewind-turn" id="rewind-turn-info">0 / 0</span>
+        <div id="rewind-dots" style="display:flex;gap:6px;flex:1;justify-content:center;"></div>
+        <span style="color:#888;font-size:11px;">回溯后可尝试不同策略</span>
+      </div>
+
+      <!-- AI 面板 -->
+      <div class="ai-panel" id="ai-panel">
+        <h3>🤖 AI 训练师</h3>
+        <div id="ai-content"><span style="color:#666">等待AI行动...</span></div>
+      </div>
+
+      <!-- 战斗日志 -->
+      <div class="battle-log" id="battle-log"></div>
+      <div style="text-align:center;margin-top:15px;">
+        <button class="btn btn-restart" onclick="restartGame()">🔄 重新开始</button>
+      </div>
+    </div>
+  </div>
+
+  <!--胜负弹窗 -->
+  <div class="result-overlay" id="result-overlay">
+    <div class="result-box" id="result-box">
+      <h2 id="result-title">???</h2>
+      <p id="result-desc"></p>
+      <button class="btn btn-primary" onclick="restartGame()">再来一局</button>
+    </div>
+  </div>
+
+  <script>
+    //========================
+    //  SVG 精灵绘制
+    // ========================
+
+    const TYPE_COLORS = {
+      fire: '#e94', water: '#39f', grass: '#5b5',
+      electric: '#fc3', ice: '#6cf', dark: '#556', normal: '#aa9',
+    };
+
+    function createMonsterSVG(monster, size = 80, flip = false) {
+      const c = TYPE_COLORS[monster.type];
+      const flipT = flip ? `transform="scale(-1,1) translate(-${size},0)"` : '';
+
+      // 生成基于ID的稳定形状
+      const seed = monster.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+      const bodyW = 30 + (seed % 15);
+      const bodyH = 25 + (seed % 12);
+      const cx = size / 2, cy = size / 2 + 5;
+
+      // 装饰元素
+      let extras = '';
+      switch (monster.type) {
+        case 'fire':
+          extras = `<ellipse cx="${cx}" cy="${cy - bodyH + 2}" rx="8" ry="12" fill="#f72" opacity="0.8">
+        <animate attributeName="ry" values="12;15;12" dur="0.6s" repeatCount="indefinite"/></ellipse>
+      <ellipse cx="${cx + 5}" cy="${cy - bodyH + 5}" rx="5" ry="8" fill="#fc3" opacity="0.7">
+        <animate attributeName="ry" values="8;11;8" dur="0.5s" repeatCount="indefinite"/>
+      </ellipse>`;
+          break;
+        case 'water':
+          extras = `<ellipse cx="${cx}" cy="${cy + bodyH - 2}" rx="${bodyW + 5}" ry="6" fill="#39f" opacity="0.3">
+        <animate attributeName="rx" values="${bodyW + 5};${bodyW + 8};${bodyW + 5}" dur="1.5s" repeatCount="indefinite"/>
+      </ellipse>`;
+          break;
+        case 'grass':
+          extras = `<ellipse cx="${cx - 8}" cy="${cy - bodyH + 2}" rx="6" ry="10" fill="#4a4" transform="rotate(-20,${cx - 8},${cy - bodyH + 2})"/>
+      <ellipse cx="${cx + 8}" cy="${cy - bodyH + 2}" rx="6" ry="10" fill="#4a4" transform="rotate(20,${cx + 8},${cy - bodyH + 2})"/>
+      <circle cx="${cx}" cy="${cy - bodyH - 2}" r="5" fill="#f5a">
+        <animate attributeName="r" values="5;6;5" dur="2s" repeatCount="indefinite"/>
+      </circle>`;
+          break;
+        case 'electric':
+          extras = `<polygon points="${cx},${cy - bodyH - 5} ${cx + 4},${cy - bodyH + 5} ${cx - 2},${cy - bodyH + 2} ${cx + 2},${cy - bodyH + 10}" fill="#fc3" opacity="0.9">
+        <animate attributeName="opacity" values="0.9;0.4;0.9" dur="0.3s" repeatCount="indefinite"/>
+      </polygon>`;
+          break;
+        case 'ice':
+          extras = `<circle cx="${cx - 12}" cy="${cy - 10}" r="3" fill="#cef" opacity="0.7">
+        <animate attributeName="opacity" values="0.7;0.3;0.7" dur="1.5s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="${cx + 14}" cy="${cy - 15}" r="2.5" fill="#def" opacity="0.6">
+        <animate attributeName="opacity" values="0.6;0.2;0.6" dur="2s" repeatCount="indefinite"/>
+      </circle>`;
+          break;
+        case 'dark':
+          extras = `<ellipse cx="${cx}" cy="${cy + bodyH}" rx="${bodyW + 8}" ry="8" fill="#222" opacity="0.5">
+        <animate attributeName="rx" values="${bodyW + 8};${bodyW + 12};${bodyW + 8}" dur="2s" repeatCount="indefinite"/>
+      </ellipse>`;
+          break;
+      }
+
+      return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+    <g ${flipT}>
+      ${extras}
+      <ellipse cx="${cx}" cy="${cy}" rx="${bodyW}" ry="${bodyH}" fill="${c}" stroke="${c}" stroke-width="1.5" opacity="0.9"/>
+      <ellipse cx="${cx}" cy="${cy}" rx="${bodyW - 5}" ry="${bodyH - 5}" fill="${c}" opacity="0.5" filter="url(#glow-${monster.id})"/>
+      <!--眼睛 -->
+      <circle cx="${cx - 9}" cy="${cy - 5}" r="4" fill="white"/>
+      <circle cx="${cx + 9}" cy="${cy - 5}" r="4" fill="white"/>
+      <circle cx="${cx - 8}" cy="${cy - 5}" r="2.5" fill="#111"/>
+      <circle cx="${cx + 10}" cy="${cy - 5}" r="2.5" fill="#111"/>
+      <circle cx="${cx - 7}" cy="${cy - 6}" r="1" fill="white"/>
+      <circle cx="${cx + 11}" cy="${cy - 6}" r="1" fill="white"/>
+      <!-- 嘴 -->
+      <path d="M${cx - 5},${cy + 4} Q${cx},${cy + 8} ${cx + 5},${cy + 4}" stroke="#333" stroke-width="1.5" fill="none"/>
+      <!-- 微呼吸 -->
+      <animateTransform attributeName="transform" type="translate" values="0,0;0,-2;0,0" dur="2s" repeatCount="indefinite" additive="sum"/>
+    </g>
+    <defs>
+      <filter id="glow-${monster.id}"><feGaussianBlur stdDeviation="3" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+  </svg>`;
+    }
+
+    // ========================
+    //  游戏状态
+    // ========================
+
+    let monsters = [];
+    let selectedPlayer = null;
+    let selectedEnemy = null;
+    let sessionId = null;
+    let currentSnapshot = null;
+    let isActing = false;
+    let rewindState = { currentTurn: 0, totalSnapshots: 1, canRewind: false };
+
+    // ========================
+    //  配置持久化
+    // ========================
+
+    function saveConfig() {
+      localStorage.setItem('agent_config', JSON.stringify({
+        apiKey: document.getElementById('apiKey').value,
+        baseUrl: document.getElementById('baseUrl').value,
+        model: document.getElementById('model').value,
+        deepseekMode: document.getElementById('deepseekMode').checked,
+      }));
+    }
+
+    function loadConfig() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('agent_config'));
+        if (saved) {
+          if (saved.apiKey) document.getElementById('apiKey').value = saved.apiKey;
+          if (saved.baseUrl) document.getElementById('baseUrl').value = saved.baseUrl;
+          if (saved.model) document.getElementById('model').value = saved.model;
+          if (saved.deepseekMode) document.getElementById('deepseekMode').checked = saved.deepseekMode;
+        }
+      } catch { }
+    }
+
+    // ========================
+    //  初始化
+    // ========================
+
+    async function init() {
+      loadConfig();
+
+      // 输入变化时自动保存
+      document.getElementById('apiKey').addEventListener('input', saveConfig);
+      document.getElementById('baseUrl').addEventListener('input', saveConfig);
+      document.getElementById('model').addEventListener('input', saveConfig);
+      document.getElementById('deepseekMode').addEventListener('change', saveConfig);
+
+      const res = await fetch('/api/monsters');
+      monsters = await res.json();
+      renderMonsterSelect('player-select', (m) => { selectedPlayer = m; checkReady(); });
+      renderMonsterSelect('enemy-select', (m) => { selectedEnemy = m; checkReady(); });
+    }
+
+    function renderMonsterSelect(containerId, onSelect) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = monsters.map(m => `
+    <div class="monster-card" data-id="${m.id}" onclick="selectMonster('${containerId}', '${m.id}', this)">
+      <div class="sprite">${createMonsterSVG(m, 60)}</div>
+      <div class="name">${m.name}</div>
+      <span class="type-badge type-${m.type}">${m.type}</span>
+      <div class="stats">HP${m.maxHp} ATK${m.attack} DEF${m.defense} SPD${m.speed}</div>
+    </div>
+  `).join('');
+
+      // 记录回调
+      container._onSelect = onSelect;
+    }
+
+    function selectMonster(containerId, id, el) {
+      const container = document.getElementById(containerId);
+      container.querySelectorAll('.monster-card').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+      const m = monsters.find(m => m.id === id);
+      container._onSelect(m);
+    }
+
+    function checkReady() {
+      document.getElementById('btn-start').disabled = !(selectedPlayer && selectedEnemy);
+    }
+
+    // ========================
+    //  开始对战
+    // ========================
+
+    document.getElementById('btn-start').onclick = async function () {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      const baseUrl = document.getElementById('baseUrl').value.trim();
+      const model = document.getElementById('model').value.trim();
+
+      if (!apiKey) { alert('请输入 API Key'); return; }
+      if (!baseUrl) { alert('请输入 Base URL'); return; }
+      if (!model) { alert('请输入模型名'); return; }
+
+      this.disabled = true;
+      this.textContent = '⏳ 创建对战...';
+
+      try {
+        const res = await fetch('/api/battle/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId: selectedPlayer.id,
+            enemyId: selectedEnemy.id,
+            apiKey, baseUrl, model,
+            deepseekMode: document.getElementById('deepseekMode').checked,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) { alert(data.error); this.disabled = false; this.textContent = '⚔️ 开始对战'; return; }
+
+        sessionId = data.sessionId;
+        currentSnapshot = data.snapshot;
+        enterBattle();
+      } catch (e) {
+        alert('创建失败: ' + e.message);
+        this.disabled = false;
+        this.textContent = '⚔️ 开始对战';
+      }
+    };
+
+    // ========================
+    //  进入战斗场景
+    // ========================
+
+    function enterBattle() {
+      document.getElementById('setup-scene').style.display = 'none';
+      document.getElementById('battle-scene').style.display = 'block';
+
+      const pt = currentSnapshot.playerTemplate;
+      const et = currentSnapshot.enemyTemplate;
+
+      // 精灵渲染
+      document.getElementById('sprite-player').innerHTML = createMonsterSVG(pt, 100);
+      document.getElementById('sprite-enemy').innerHTML = createMonsterSVG(et, 100, true);
+
+      // 名称
+      document.getElementById('player-name').textContent = pt.name;
+      document.getElementById('enemy-name').textContent = et.name;
+
+      updateHP();
+      renderMoves();
+
+      // 初始化回溯状态
+      rewindState = { currentTurn: 0, totalSnapshots: 1, canRewind: false };
+      updateRewindBar();
+    }
+
+    // ========================
+    //  HP 更新
+    // ========================
+
+    function updateHP() {
+      const s = currentSnapshot;
+      const pPct = (s.player.currentHp / s.playerTemplate.maxHp) * 100;
+      const ePct = (s.enemy.currentHp / s.enemyTemplate.maxHp) * 100;
+
+      const pFill = document.getElementById('player-hp-fill');
+      const eFill = document.getElementById('enemy-hp-fill');
+
+      pFill.style.width = pPct + '%';
+      eFill.style.width = ePct + '%';
+
+      pFill.style.background = pPct > 50 ? '#4caf50' : pPct > 20 ? '#ff9800' : '#f44336';
+      eFill.style.background = ePct > 50 ? '#4caf50' : ePct > 20 ? '#ff9800' : '#f44336';
+
+      document.getElementById('player-hp-text').textContent = `${s.player.currentHp}/${s.playerTemplate.maxHp}`;
+      document.getElementById('enemy-hp-text').textContent = `${s.enemy.currentHp}/${s.enemyTemplate.maxHp}`;
+    }
+
+    // ========================
+    //  技能渲染
+    // ========================
+
+    function renderMoves() {
+      const panel = document.getElementById('moves-panel');
+      const pt = currentSnapshot.playerTemplate;
+      const pp = currentSnapshot.player.pp;
+
+      panel.innerHTML = pt.moves.map((m, i) => `
+    <button class="move-btn move-border-${m.type}" onclick="doAction(${i})" ${pp[i] <= 0 || isActing ? 'disabled' : ''}>
+      <span class="move-name">${m.name}</span>
+      <span class="move-pp">PP ${pp[i]}/${m.maxPp}</span>
+      <div class="move-info">
+        <span class="type-badge type-${m.type}" style="font-size:10px;padding:1px 5px;">${m.type}</span>
+        威力${m.power} 命中${m.accuracy}
+      </div>
+    </button>
+  `).join('');
+    }
+
+    // ========================
+    //  执行行动 (SSE)
+    // ========================
+
+    async function doAction(moveIndex) {
+      if (isActing) return;
+      isActing = true;
+      renderMoves();
+
+      // 清空AI面板
+      document.getElementById('ai-content').innerHTML = '';
+      setMessage('⏳ 战斗中...');
+
+      try {
+        const res = await fetch('/api/battle/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, moveIndex }),
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          let eventType = '';
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ') && eventType) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                handleSSE(eventType, data);
+              } catch { } eventType = '';
+            }
+          }
+        }
+      } catch (e) {
+        setMessage('❌ 出错: ' + e.message);
+      }
+
+      isActing = false;
+      renderMoves();
+    }
+
+    // ========================
+    //  SSE 事件处理
+    // ========================
+
+    let thinkingEl = null;
+    let textEl = null;
+
+    function handleSSE(event, data) {
+      const aiContent = document.getElementById('ai-content');
+      const aiPanel = document.getElementById('ai-panel');
+
+      switch (event) {
+        case 'phase':
+          if (data.phase === 'player_attack') {
+            setMessage('🎯 你的精灵发起攻击！');
+          } else if (data.phase === 'enemy_thinking') {
+            setMessage('🤔 AI训练师正在思考...');
+            thinkingEl = null;
+            textEl = null;
+          } else if (data.phase === 'enemy_attack') {
+            setMessage('👾 对手发起攻击！');
+          }
+          break;
+
+        case 'thinking_delta':
+          if (!thinkingEl) {
+            thinkingEl = document.createElement('div');
+            thinkingEl.className = 'ai-thinking';
+            thinkingEl.innerHTML = '<span style="color:#aaf;">💭 思考过程:</span>\n';
+            aiContent.appendChild(thinkingEl);
+          }
+          thinkingEl.textContent += data.delta;
+          aiPanel.scrollTop = aiPanel.scrollHeight;
+          break;
+
+        case 'thinking_done':
+          break;
+
+        case 'text_delta':
+          if (!textEl) {
+            textEl = document.createElement('div');
+            textEl.className = 'ai-text';
+            aiContent.appendChild(textEl);
+          }
+          textEl.textContent += data.delta;
+          aiPanel.scrollTop = aiPanel.scrollHeight;
+          break;
+
+        case 'tool_call_start':
+          const toolEl = document.createElement('div');
+          toolEl.className = 'ai-tool';
+          toolEl.textContent = `🔧 调用工具: ${data.name}`;
+          aiContent.appendChild(toolEl);
+          aiPanel.scrollTop = aiPanel.scrollHeight;
+          break;
+
+        case 'tool_call_done':
+          const toolDoneEl = document.createElement('div');
+          toolDoneEl.className = 'ai-tool';
+          toolDoneEl.textContent = `📋 参数: ${data.arguments}`;
+          aiContent.appendChild(toolDoneEl);
+          aiPanel.scrollTop = aiPanel.scrollHeight;
+          break;
+
+        case 'ai_reason':
+          if (data.reason) {
+            const reasonEl = document.createElement('div');
+            reasonEl.className = 'ai-reason';
+            reasonEl.textContent = `💬 "${data.reason}"`;
+            aiContent.appendChild(reasonEl); aiPanel.scrollTop = aiPanel.scrollHeight;
+          }
+          break;
+
+        case 'move_result':
+          handleMoveResult(data);
+          break;
+
+        case 'snapshot':
+          currentSnapshot = data;
+          updateHP();
+          break;
+
+        case 'battle_end':
+          currentSnapshot = data.snapshot;
+          updateHP();
+          setTimeout(() => showResult(data.winner), 800);
+          break;
+
+        case 'ai_error':
+          const errEl = document.createElement('div');
+          errEl.className = 'ai-text';
+          errEl.style.color = '#f66';
+          errEl.textContent = '⚠️ AI错误: ' + data.message;
+          aiContent.appendChild(errEl);
+          break;
+
+        case 'rewind_info':
+          rewindState = {
+            currentTurn: data.currentTurn,
+            totalSnapshots: data.totalSnapshots,
+            canRewind: data.canRewind,
+          };
+          updateRewindBar();
+          break;
+
+        case 'error':
+          setMessage('❌ ' + data.message);
+          break;
+      }
+    }
+
+    // ========================
+    //  技能动画
+    // ========================
+
+    async function handleMoveResult(result) {
+      const isPlayer = result.attacker === currentSnapshot.playerTemplate.name;
+      const attackerEl = document.getElementById(isPlayer ? 'sprite-player' : 'sprite-enemy');
+      const defenderEl = document.getElementById(isPlayer ? 'sprite-enemy' : 'sprite-player');
+
+      setMessage(result.message);
+      addLog(result);
+
+      if (!result.missed) {
+        //攻击动画
+        attackerEl.classList.add(isPlayer ? 'attacking-right' : 'attacking-left');
+        await sleep(300);
+
+        // 被击中动画
+        defenderEl.classList.add('hit-shake');
+        await sleep(400);
+
+        attackerEl.classList.remove('attacking-right', 'attacking-left');
+        defenderEl.classList.remove('hit-shake');
+
+        // 更新HP
+        if (isPlayer) {
+          currentSnapshot.enemy.currentHp = result.defenderHp;
+        } else {
+          currentSnapshot.player.currentHp = result.defenderHp;
+        }
+        updateHP();
+
+        // 倒下动画
+        if (result.fainted) {
+          await sleep(300);
+          defenderEl.classList.add('fainting');
+        }
+      }
+
+      await sleep(600);
+    }
+
+    // ========================
+    //  战斗日志
+    // ========================
+
+    function addLog(result) {
+      const log = document.getElementById('battle-log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+
+      if (result.missed) {
+        entry.className += ' log-miss';
+        entry.textContent = result.message;
+      } else if (result.fainted) {
+        entry.className += ' log-faint';
+        entry.textContent = result.message;
+      } else {
+        let html = result.message;
+        if (result.effectiveness === 'super') entry.className += ' log-super';
+        if (result.effectiveness === 'resist') entry.className += ' log-resist';
+        if (result.critical) html = '⚡ ' + html;
+        entry.innerHTML = html;
+      }
+
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // ========================
+    //  结果画面
+    // ========================
+
+    function showResult(winner) {
+      const overlay = document.getElementById('result-overlay');
+      const box = document.getElementById('result-box');
+      const title = document.getElementById('result-title');
+      const desc = document.getElementById('result-desc');
+
+      overlay.classList.add('show');
+
+      if (winner === 'player') {
+        box.className = 'result-box result-win';
+        title.textContent = '🏆 胜利！';
+        desc.textContent = `你的${currentSnapshot.playerTemplate.name}击败了AI的${currentSnapshot.enemyTemplate.name}！`;
+      } else {
+        box.className = 'result-box result-lose';
+        title.textContent = '💀 失败...';
+        desc.textContent = `AI的${currentSnapshot.enemyTemplate.name}击败了你的${currentSnapshot.playerTemplate.name}！`;
+      }
+    }
+
+    // ========================
+    //  重新开始
+    // ========================
+
+    function restartGame() {
+      sessionId = null;
+      currentSnapshot = null;
+      isActing = false;
+      selectedPlayer = null;
+      selectedEnemy = null;
+      rewindState = { currentTurn: 0, totalSnapshots: 1, canRewind: false };
+      document.getElementById('result-overlay').classList.remove('show');
+      document.getElementById('battle-scene').style.display = 'none';
+      document.getElementById('setup-scene').style.display = 'block';
+      document.getElementById('btn-start').disabled = true;
+      document.getElementById('btn-start').textContent = '⚔️ 开始对战';
+      document.getElementById('battle-log').innerHTML = '';
+      document.getElementById('ai-content').innerHTML = '<span style="color:#666">等待AI行动...</span>';
+
+      // 清除精灵选中状态
+      document.querySelectorAll('.monster-card').forEach(c => c.classList.remove('selected'));
+
+      // 恢复保存的配置
+      loadConfig();
+    }
+
+    // ========================
+    //  回溯功能
+    // ========================
+
+    function updateRewindBar() {
+      const btn = document.getElementById('btn-rewind');
+      btn.disabled = !rewindState.canRewind || isActing;
+
+      const info = document.getElementById('rewind-turn-info');
+      info.textContent = `${rewindState.currentTurn} / ${rewindState.totalSnapshots - 1}`;
+
+      // 渲染回合圆点
+      const dots = document.getElementById('rewind-dots');
+      const total = rewindState.totalSnapshots;
+      const current = rewindState.currentTurn;
+
+      let dotsHtml = '';
+      for (let i = 0; i < total; i++) {
+        const isActive = i === current;
+        const isFuture = i > current;
+        const cls = isActive ? 'active' : isFuture ? 'future' : '';
+        dotsHtml += `<span class="rewind-turn-dot ${cls}" onclick="rewindToTurn(${i})" title="回合 ${i}"></span>`;
+      }
+      dots.innerHTML = dotsHtml;
+    }
+
+    async function rewindOneTurn() {
+      if (!rewindState.canRewind || isActing) return;
+      const targetTurn = rewindState.currentTurn - 1;
+      if (targetTurn < 0) return;
+      await rewindToTurn(targetTurn);
+    }
+
+    async function rewindToTurn(turnIndex) {
+      if (isActing) return;
+      if (turnIndex >= rewindState.totalSnapshots) return;
+      if (turnIndex === rewindState.currentTurn) return;
+
+      setMessage(`⏪ 回溯到回合 ${turnIndex}...`);
+
+      try {
+        const res = await fetch('/api/battle/rewind', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, turnIndex }),
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          setMessage('❌ 回溯失败: ' + data.error);
+          return;
+        }
+
+        // 更新状态
+        currentSnapshot = data.snapshot;
+        rewindState.currentTurn = data.currentTurn;
+        rewindState.totalSnapshots = data.totalSnapshots;
+        rewindState.canRewind = data.currentTurn > 0;
+
+        // 清空战斗日志和AI面板
+        document.getElementById('battle-log').innerHTML = '';
+        document.getElementById('ai-content').innerHTML = '<span style="color:#666">回溯成功！重新选择技能吧。</span>';
+
+        // 重新渲染精灵（移除倒下动画的 forwards 填充效果）
+        const playerSpriteEl = document.getElementById('sprite-player');
+        const enemySpriteEl = document.getElementById('sprite-enemy');
+        playerSpriteEl.classList.remove('fainting');
+        enemySpriteEl.classList.remove('fainting');
+        playerSpriteEl.innerHTML = createMonsterSVG(currentSnapshot.playerTemplate, 100);
+        enemySpriteEl.innerHTML = createMonsterSVG(currentSnapshot.enemyTemplate, 100, true);
+
+        // 关闭胜负弹窗
+        document.getElementById('result-overlay').classList.remove('show');
+
+        // 重新渲染
+        updateHP();
+        renderMoves();
+        updateRewindBar();
+        setMessage(`⏪ 已回溯到回合 ${turnIndex}！重新选择技能吧！`);
+      } catch (e) {
+        setMessage('❌ 回溯出错: ' + e.message);
+      }
+    }
+
+    // ========================
+    //  辅助
+    // ========================
+
+    function setMessage(msg) {
+      document.getElementById('battle-msg').textContent = msg;
+    }
+
+    function sleep(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+
+    //========================
+    //模型列表
+    // ========================
+
+    let allModels = [];
+    let modelDropdownVisible = false;
+
+    async function fetchModels() {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      const baseUrl = document.getElementById('baseUrl').value.trim();
+      if (!apiKey || !baseUrl) { alert('请先填写 API Key 和 Base URL'); return; }
+
+      const btn = document.getElementById('btn-fetch-models');
+      btn.textContent = '⏳ 加载...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey, baseUrl }),
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          alert('获取模型列表失败: ' + data.error);
+          return;
+        }
+
+        allModels = (data.data || [])
+          .map(m => m.id || m.name || '')
+          .filter(Boolean)
+          .sort();
+
+        if (allModels.length === 0) {
+          alert('未获取到模型列表');
+          return;
+        }
+
+        showModelDropdown();
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      } finally {
+        btn.textContent = '📋 获取列表';
+        btn.disabled = false;
+      }
+    }
+
+    function showModelDropdown() {
+      const dropdown = document.getElementById('model-dropdown');
+      dropdown.style.display = 'block';
+      modelDropdownVisible = true;
+      document.getElementById('model-search').value = '';
+      renderModelList(allModels);
+      document.getElementById('model-search').focus();
+    }
+
+    function hideModelDropdown() {
+      document.getElementById('model-dropdown').style.display = 'none';
+      modelDropdownVisible = false;
+    }
+
+    function filterModels() {
+      const query = document.getElementById('model-search').value.toLowerCase();
+      const filtered = allModels.filter(m => m.toLowerCase().includes(query));
+      renderModelList(filtered);
+    }
+
+    function renderModelList(models) {
+      const list = document.getElementById('model-list');
+      if (models.length === 0) {
+        list.innerHTML = '<div style="padding:12px;text-align:center;color:#666;font-size:13px;">无匹配模型</div>';
+        return;
+      }
+      list.innerHTML = models.map(m => `
+    <div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.04);transition:background0.15s;"
+         onmouseover="this.style.background='rgba(255,210,0,0.1)'"
+         onmouseout="this.style.background=''"
+         onclick="pickModel('${m.replace(/'/g, "\\'")}')">
+      ${m}
+    </div>
+  `).join('');
+    }
+
+    function pickModel(modelId) {
+      document.getElementById('model').value = modelId;
+      hideModelDropdown();
+    }
+
+    // 点击外部关闭下拉
+    document.addEventListener('click', (e) => {
+      if (modelDropdownVisible) {
+        const dropdown = document.getElementById('model-dropdown');
+        const btn = document.getElementById('btn-fetch-models');
+        if (!dropdown.contains(e.target) && e.target !== btn) {
+          hideModelDropdown();
+        }
+      }
+    });
+
+    // 启动
+    init();
+  </script>
+</body>
+
+</html>
