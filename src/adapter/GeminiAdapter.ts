@@ -179,7 +179,7 @@ export class GeminiAdapter implements MessageAdapter {
       parts: [
         {
           functionResponse: {
-            name: msg.metadata.toolName || "unknown",
+            name: toolResult.name || msg.metadata.toolName || "unknown",
             response: this.safeParseJson(toolResult.result),
           },
         },

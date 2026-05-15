@@ -124,7 +124,8 @@ export class ToolKit {
       //工具不存在，返回错误消息
       return Message.tool(
         toolCallPart.toolCallId,
-        JSON.stringify({ error: `未知工具: ${toolCallPart.name}` })
+        JSON.stringify({ error: `未知工具: ${toolCallPart.name}` }),
+        toolCallPart.name
       );
     }
 
@@ -142,7 +143,8 @@ export class ToolKit {
       const errorMsg = e instanceof Error ? e.message : String(e);
       return Message.tool(
         toolCallPart.toolCallId,
-        JSON.stringify({ error: errorMsg })
+        JSON.stringify({ error: errorMsg }),
+        toolCallPart.name
       );
     }
 

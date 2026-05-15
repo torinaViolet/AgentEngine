@@ -768,7 +768,8 @@ export class Agent {
       .filter((item) => !item.approved)
       .map((item) => Message.tool(
         item.toolCall.toolCallId,
-        JSON.stringify({ error: item.reason || "工具调用被拒绝", rejected: true })
+        JSON.stringify({ error: item.reason || "工具调用被拒绝", rejected: true }),
+        item.toolCall.name
       ));
 
     if (approvedToolCalls.length === 0) {
@@ -945,7 +946,8 @@ export class Agent {
     if (policy === "pause") {
       const result = Message.tool(
         toolCall.toolCallId,
-        JSON.stringify({ error: error.message, paused: true })
+        JSON.stringify({ error: error.message, paused: true }),
+        toolCall.name
       );
       this.emitToolExecutionError(error, toolCall, result);
       this._session.addTool([result]);
@@ -954,7 +956,7 @@ export class Agent {
     }
 
     this.emitToolExecutionError(error, toolCall);
-    return Message.tool(toolCall.toolCallId, JSON.stringify({ error: error.message }));
+    return Message.tool(toolCall.toolCallId, JSON.stringify({ error: error.message }), toolCall.name);
   }
 
   private emitToolExecutionError(

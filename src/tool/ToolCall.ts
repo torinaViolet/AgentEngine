@@ -27,13 +27,15 @@ export class ToolCall {
     id: string,
     name: string,
     args: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    ctx?: Context
   ) {
     this._template = template;
     this._signal = signal;
     this.id = id;
     this.name = name;
     this.arguments = args;
+    this._ctx = ctx;
   }
 
   // ========================
@@ -100,7 +102,7 @@ export class ToolCall {
         ? ctx.result
         : JSON.stringify(ctx.result ?? null);
 
-    return Message.tool(this.id, content);
+    return Message.tool(this.id, content, this.name);
   }
 
   // ========================

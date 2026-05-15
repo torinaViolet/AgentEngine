@@ -80,10 +80,10 @@ export class Message {
   /**
    * 创建 Tool Result 消息
    */
-  static tool(toolCallId: string, result: string): Message {
+  static tool(toolCallId: string, result: string, name?: string): Message {
     return new Message(Role.Tool, [
-      { type: "tool_result", toolCallId, result },
-    ]);
+      { type: "tool_result", toolCallId, result, ...(name ? { name } : {}) },
+    ], name ? { toolName: name } : {});
   }
 
   /**
@@ -202,11 +202,11 @@ export class Message {
       this.parent = undefined;
     } else {
       // 嫁接：子节点继承父节点
-      parent.children.splice(index, 1);
-      for (const child of this.children) {
+      const children = [...this.children];
+      for (const child of children) {
         child.parent = parent;
-        parent.children.splice(index, 0, child);
       }
+      parent.children.splice(index, 1, ...children);
       this.children.length = 0;
       this.parent = undefined;
     }

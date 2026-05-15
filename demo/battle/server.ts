@@ -284,6 +284,27 @@ const server = http.createServer(async (req, res) => {
 //  对战回合执行
 // ========================
 
+function pushCurrentSnapshot(gs: GameSession): BattleSnapshot {
+  const snapshot = gs.battle.snapshot();
+  gs.turnSnapshots = gs.turnSnapshots.slice(0, snapshot.turn + 1);
+  gs.turnSnapshots[snapshot.turn] = snapshot;
+  return snapshot;
+}
+
+function sendRewindInfo(gs: GameSession, sendEvent: (event: string, data: any) => void): void {
+  sendEvent("rewind_info", {
+    currentTurn: gs.battle.turn,
+    canRewind: gs.battle.turn > 0,
+    totalSnapshots: gs.turnSnapshots.length,
+  });
+}
+
+function sendBattleEnd(gs: GameSession, sendEvent: (event: string, data: any) => void): void {
+  const snapshot = pushCurrentSnapshot(gs);
+  sendRewindInfo(gs, sendEvent);
+  sendEvent("battle_end", { winner: gs.battle.winner, snapshot });
+}
+
 async function executeTurn(
   gs: GameSession,
   playerMoveIndex: number,
@@ -293,28 +314,22 @@ async function executeTurn(
   const snap = battle.snapshot();
 
   if (battle.isOver) {
-    sendEvent("battle_end", { winner: battle.winner, snapshot: battle.snapshot() });
+    sendBattleEnd(gs, sendEvent);
     return;
   }
 
-  // 保存回合执行前的快照（用于回溯）
-  gs.turnSnapshots.push(battle.snapshot());
-
-  // 速度判定谁先手
-  const playerSpeed = snap.playerTemplate.speed;
-  const enemySpeed = snap.enemyTemplate.speed;
-  const playerFirst = playerSpeed >= enemySpeed;
-
-  // 玩家技能名
   const playerMoveName = snap.playerTemplate.moves[playerMoveIndex]?.name;
   if (!playerMoveName) {
     sendEvent("error", { message: "无效的技能索引" });
     return;
   }
 
+  const playerSpeed = snap.playerTemplate.speed;
+  const enemySpeed = snap.enemyTemplate.speed;
+  const playerFirst = playerSpeed >= enemySpeed;
+
   battle.nextTurn();
 
-  // 复用 Agent，更新事件监听器
   const agent = gs.agent;
   agent.removeAllListeners();
   agent
@@ -337,24 +352,21 @@ async function executeTurn(
     });
 
   if (playerFirst) {
-    // 玩家先攻
     sendEvent("phase", { phase: "player_attack" });
     const playerResult = battle.executeMove("player", playerMoveName);
     sendEvent("move_result", playerResult);
 
     if (battle.isOver) {
-      sendEvent("battle_end", { winner: battle.winner, snapshot: battle.snapshot() });
+      sendBattleEnd(gs, sendEvent);
       return;
     }
 
-    // AI行动
     sendEvent("phase", { phase: "enemy_thinking" });
     const aiMove = await getAIMove(agent, battle, sendEvent, gs.deepseekMode);
     sendEvent("phase", { phase: "enemy_attack" });
     const enemyResult = battle.executeMove("enemy", aiMove);
     sendEvent("move_result", enemyResult);
   } else {
-    //AI 先攻
     sendEvent("phase", { phase: "enemy_thinking" });
     const aiMove = await getAIMove(agent, battle, sendEvent, gs.deepseekMode);
     sendEvent("phase", { phase: "enemy_attack" });
@@ -362,25 +374,21 @@ async function executeTurn(
     sendEvent("move_result", enemyResult);
 
     if (battle.isOver) {
-      sendEvent("battle_end", { winner: battle.winner, snapshot: battle.snapshot() });
+      sendBattleEnd(gs, sendEvent);
       return;
     }
 
-    // 玩家攻击
     sendEvent("phase", { phase: "player_attack" });
     const playerResult = battle.executeMove("player", playerMoveName);
     sendEvent("move_result", playerResult);
   }
 
   if (battle.isOver) {
-    sendEvent("battle_end", { winner: battle.winner, snapshot: battle.snapshot() });
+    sendBattleEnd(gs, sendEvent);
   } else {
-    sendEvent("snapshot", battle.snapshot());
-    sendEvent("rewind_info", {
-      currentTurn: battle.turn,
-      canRewind: gs.turnSnapshots.length > 1,
-      totalSnapshots: gs.turnSnapshots.length,
-    });
+    const snapshot = pushCurrentSnapshot(gs);
+    sendEvent("snapshot", snapshot);
+    sendRewindInfo(gs, sendEvent);
   }
 
 }

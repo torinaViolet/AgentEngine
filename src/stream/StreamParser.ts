@@ -65,7 +65,7 @@ export class StreamParser {
       const thinkingDelta =
         delta.reasoning_content ?? delta.thinking ?? null;
 
-      if (thinkingDelta) {
+      if (thinkingDelta !== null && thinkingDelta !== undefined) {
         this._thinkingBuffer += thinkingDelta;
         events.push({
           type: StreamEventType.THINKING_DELTA,
@@ -75,7 +75,7 @@ export class StreamParser {
       }
 
       // ---- 文本增量 ----
-      if (delta.content) {
+      if (delta.content !== null && delta.content !== undefined) {
         this._textBuffer += delta.content;
         events.push({
           type: StreamEventType.TEXT_DELTA,

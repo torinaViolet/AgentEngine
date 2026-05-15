@@ -223,7 +223,7 @@ export class Tool {
       }
     }
 
-    return new ToolCall(this, toolCallId, this._name, ctx.arguments, signal);
+    return new ToolCall(this, toolCallId, this._name, ctx.arguments, signal, ctx);
   }
 
   /**

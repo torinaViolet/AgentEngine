@@ -38,6 +38,7 @@ export interface ToolCallPart {
 export interface ToolResultPart {
   type: "tool_result";
   toolCallId: string;
+  name?: string;
   /** JSON string of result */
   result: string;
 }

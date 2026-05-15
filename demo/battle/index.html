@@ -759,8 +759,8 @@
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
               <input type="checkbox" id="deepseekMode" style="width:auto;" />
-              <label for="deepseekMode" style="margin:0;font-size:13px;color:#ccc;cursor:pointer;">DeepSeek 模式</label>
-              <span style="font-size:11px;color:#888;">（工具调用时回传 reasoning_content，DeepSeek/Qwen 思考模型需开启）</span>
+              <label for="deepseekMode" style="margin:0;font-size:13px;color:#ccc;cursor:pointer;">思考模型兼容模式</label>
+              <span style="font-size:11px;color:#888;">（工具调用时回传 reasoning_content，部分 DeepSeek/Qwen 思考模型需开启）</span>
             </div>
             <div id="model-dropdown"
               style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;margin-top:4px;background:#1a1a2e;border:1px solid rgba(255,255,255,0.15);border-radius:8px;max-height:250px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.5);">
@@ -1082,8 +1082,12 @@
       const et = currentSnapshot.enemyTemplate;
 
       // 精灵渲染
-      document.getElementById('sprite-player').innerHTML = createMonsterSVG(pt, 100);
-      document.getElementById('sprite-enemy').innerHTML = createMonsterSVG(et, 100, true);
+      const playerSpriteEl = document.getElementById('sprite-player');
+      const enemySpriteEl = document.getElementById('sprite-enemy');
+      playerSpriteEl.classList.remove('fainting');
+      enemySpriteEl.classList.remove('fainting');
+      playerSpriteEl.innerHTML = createMonsterSVG(pt, 100);
+      enemySpriteEl.innerHTML = createMonsterSVG(et, 100, true);
 
       // 名称
       document.getElementById('player-name').textContent = pt.name;
@@ -1159,6 +1163,14 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, moveIndex }),
         });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `请求失败: ${res.status}`);
+        }
+        if (!res.body) {
+          throw new Error('响应体为空');
+        }
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -1361,11 +1373,9 @@
         entry.className += ' log-faint';
         entry.textContent = result.message;
       } else {
-        let html = result.message;
         if (result.effectiveness === 'super') entry.className += ' log-super';
         if (result.effectiveness === 'resist') entry.className += ' log-resist';
-        if (result.critical) html = '⚡ ' + html;
-        entry.innerHTML = html;
+        entry.textContent = result.critical ? '⚡ ' + result.message : result.message;
       }
 
       log.appendChild(entry);
@@ -1587,18 +1597,24 @@
 
     function renderModelList(models) {
       const list = document.getElementById('model-list');
+      list.innerHTML = '';
       if (models.length === 0) {
-        list.innerHTML = '<div style="padding:12px;text-align:center;color:#666;font-size:13px;">无匹配模型</div>';
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:12px;text-align:center;color:#666;font-size:13px;';
+        empty.textContent = '无匹配模型';
+        list.appendChild(empty);
         return;
       }
-      list.innerHTML = models.map(m => `
-    <div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.04);transition:background0.15s;"
-         onmouseover="this.style.background='rgba(255,210,0,0.1)'"
-         onmouseout="this.style.background=''"
-         onclick="pickModel('${m.replace(/'/g, "\\'")}')">
-      ${m}
-    </div>
-  `).join('');
+
+      for (const modelId of models) {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.04);transition:background 0.15s;';
+        item.textContent = modelId;
+        item.onmouseover = () => { item.style.background = 'rgba(255,210,0,0.1)'; };
+        item.onmouseout = () => { item.style.background = ''; };
+        item.onclick = () => pickModel(modelId);
+        list.appendChild(item);
+      }
     }
 
     function pickModel(modelId) {
