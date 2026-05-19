@@ -9,6 +9,7 @@ import {
 } from "../message/MessagePart";
 import { MediaResolver } from "../media/MediaResolver";
 import { DefaultMediaResolver } from "../media/DefaultMediaResolver";
+import { generateId } from "../utils";
 import {
   MessageAdapter,
   SerializedResult,
@@ -139,26 +140,22 @@ export class GeminiAdapter implements MessageAdapter {
   // ---- User 消息 ----
 
   private async serializeUserMessage(msg: Message): Promise<unknown> {
-    const parts: unknown[] = [];
-
-    for (const part of msg.parts) {
-      switch (part.type) {
-        case "text":
-          parts.push({ text: part.text });
-          break;
-        case "image":
-          parts.push(await this.serializeInlineData(part));
-          break;
-        case "audio":
-          parts.push(await this.serializeInlineData(part));
-          break;
-        case "file":
-          parts.push(await this.serializeFilePart(part));
-          break;
-        default:
-          break;
-      }
-    }
+    // 并行处理各 part 以加速多媒体解析
+    const parts = (await Promise.all(
+      msg.parts.map(async (part): Promise<unknown> => {
+        switch (part.type) {
+          case "text":
+            return { text: part.text };
+          case "image":
+          case "audio":
+            return await this.serializeInlineData(part);
+          case "file":
+            return await this.serializeFilePart(part);
+          default:
+            return null;
+        }
+      })
+    )).filter((p) => p !== null);
 
     return {
       role: "user",
@@ -264,11 +261,11 @@ export class GeminiAdapter implements MessageAdapter {
               parts.push({ type: "text", text: gPart.text as string });
             }
           } else if (gPart.functionCall) {
-            // 工具调用
+            // 工具调用 —— Gemini 原生 functionCall 没有 id，生成唯一 id 避免批量冲突
             const fc = gPart.functionCall as Record<string, unknown>;
             parts.push({
               type: "tool_call",
-              toolCallId: (fc.name as string) + "_" + Date.now(),
+              toolCallId: generateId(fc.name as string),
               name: fc.name as string,
               arguments: JSON.stringify(fc.args || {}),
             });

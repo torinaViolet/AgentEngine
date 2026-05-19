@@ -1,6 +1,5 @@
 import { Message } from "../message/Message";
 import { MessagePart } from "../message/MessagePart";
-import { Usage } from "../message/Usage";
 import { MessageAdapter } from "../adapter/MessageAdapter";
 import type { SerializeOptions, ThinkingSerializationMode } from "../adapter/MessageAdapter";
 import { OpenAIAdapter } from "../adapter/OpenAIAdapter";
@@ -182,6 +181,18 @@ export interface CustomEvent {
 /** 事件处理函数签名 */
 type EventHandler = (event: StreamEvent | CustomEvent) => void;
 
+/** 事件 handler 抛出异常时的回调。默认 console.error，可通过 setHandlerErrorHandler() 覆盖为 noop 或自定义 logger。 */
+export type HandlerErrorHandler = (
+  error: Error,
+  event: StreamEvent | CustomEvent
+) => void;
+
+/** 默认 handler 错误处理器 */
+const defaultHandlerErrorHandler: HandlerErrorHandler = (error, event) => {
+  // eslint-disable-next-line no-console
+  console.error(`[AgentEngine] Event handler error [${event.type}]:`, error);
+};
+
 /**
  * 智能体 — 自动循环层
  *
@@ -215,6 +226,7 @@ export class Agent {
   private _handlers: Map<string, EventHandler[]> = new Map();
   private _activeAbortController?: AbortController;
   private _lastRunState?: AgentRunState;
+  private _handlerErrorHandler: HandlerErrorHandler = defaultHandlerErrorHandler;
 
   constructor(options: AgentOptions) {
     this._client = options.client;
@@ -720,14 +732,8 @@ export class Agent {
     );
 
     // 解析 chunks
-    let streamUsage: Usage | undefined;
     for await (const chunk of stream as AsyncIterable<any>) {
       this.throwIfAborted(run.signal);
-
-      if (chunk.usage) {
-        streamUsage = Usage.fromRaw(chunk.usage);
-      }
-
       const events = parser.feed(chunk);
       this.emitAll(events);
     }
@@ -742,11 +748,8 @@ export class Agent {
     const assistantMsg = this.extractMessage(finalEvents);
     const finishReason = this.extractFinishReason(finalEvents);
 
-    // 填充 model 和 usage
+    // 填充 model（usage 已由 StreamParser 在 buildMessage 中填入）
     assistantMsg.model = this._model;
-    if (streamUsage) {
-      assistantMsg.usage = streamUsage;
-    }
 
     return { assistantMsg, finishReason };
   }
@@ -842,10 +845,26 @@ export class Agent {
       try {
         handler(event);
       } catch (e) {
-        // handler异常不应中断流程
-        console.error(`Event handler error [${event.type}]:`, e);
+        // handler 异常不应中断流程，交给可配置的错误处理器
+        const error = e instanceof Error ? e : new Error(String(e));
+        try {
+          this._handlerErrorHandler(error, event);
+        } catch {
+          // 错误处理器本身也抛错时静默吞掉，避免递归
+        }
       }
     }
+  }
+
+  /**
+   * 设置事件 handler 报错时的处理器。
+   *
+   * 默认会调用 console.error 记录，可传入 noop 完全静默或接入自定义 logger。
+   * 传入 undefined 或不传参时恢复为默认行为。
+   */
+  setHandlerErrorHandler(handler?: HandlerErrorHandler): this {
+    this._handlerErrorHandler = handler ?? defaultHandlerErrorHandler;
+    return this;
   }
 
   private emitAll(events: StreamEvent[]): void {
@@ -917,18 +936,25 @@ export class Agent {
       }
     }
 
-    for (let i = 0; i < approvedToolCalls.length; i++) {
-      const result = toolResults.find((msg) =>
-        msg.parts.some((part) =>
-          part.type === "tool_result" && part.toolCallId === approvedToolCalls[i].toolCallId
-        )
-      );
+    // 按 toolCallId 建索引，避免 O(n²) 查找，且不依赖顺序
+    const resultByCallId = new Map<string, Message>();
+    for (const result of toolResults) {
+      for (const part of result.parts) {
+        if (part.type === "tool_result") {
+          resultByCallId.set(part.toolCallId, result);
+          break;
+        }
+      }
+    }
+
+    for (const tc of approvedToolCalls) {
+      const result = resultByCallId.get(tc.toolCallId);
       if (!result) continue;
       this.throwIfAborted(signal);
       this.emit({
         type: StreamEventType.TOOL_EXECUTE_DONE,
-        toolCallId: approvedToolCalls[i].toolCallId,
-        name: approvedToolCalls[i].name,
+        toolCallId: tc.toolCallId,
+        name: tc.name,
         result,
       });
     }
@@ -1256,6 +1282,33 @@ export class Agent {
     if (error instanceof AgentTimeoutError || error.name === "TimeoutError") return "timeout";
     if (error instanceof AgentAbortError || error.name === "AbortError") return "abort";
     if (error instanceof ToolExecutionError || error.name === "ToolExecutionError") return "tool_execution_error";
+
+    const name = (error.name || "").toLowerCase();
+    const message = (error.message || "").toLowerCase();
+    const code = (error as Error & { code?: string }).code?.toLowerCase() ?? "";
+    const causeName = ((error as Error & { cause?: { name?: string } }).cause?.name || "").toLowerCase();
+
+    if (
+      name.includes("apiconnection") ||
+      name.includes("connection") ||
+      name.includes("network") ||
+      causeName.includes("connection") ||
+      code === "econnreset" ||
+      code === "econnrefused" ||
+      code === "etimedout" ||
+      code === "enotfound" ||
+      code === "eai_again" ||
+      message.includes("fetch failed") ||
+      message.includes("network error") ||
+      message.includes("socket hang up")
+    ) {
+      return "network_error";
+    }
+
+    if (name.includes("stream") || message.includes("stream error") || message.includes("premature close")) {
+      return "stream_error";
+    }
+
     return "unknown_error";
   }
 
@@ -1275,11 +1328,17 @@ export class Agent {
   }
 
   private isContinuableError(error: Error): boolean {
-    return error instanceof AgentTimeoutError ||
+    if (
+      error instanceof AgentTimeoutError ||
       error instanceof AgentAbortError ||
       error instanceof ToolExecutionError ||
       error.name === "TimeoutError" ||
       error.name === "AbortError" ||
-      error.name === "ToolExecutionError";
+      error.name === "ToolExecutionError"
+    ) {
+      return true;
+    }
+    const reason = this.classifyStopReason(error);
+    return reason === "network_error" || reason === "stream_error";
   }
 }

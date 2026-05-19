@@ -34,6 +34,14 @@ export class Message {
   public parent?: Message;
   public readonly children: Message[] = [];
 
+  // === Getter 缓存（懒计算，parts 变更时通过 addX 方法失效；
+  //     如直接 push parts，请手动调用 invalidateCache()） ===
+  private _textCache?: string;
+  private _thinkingCache?: string;
+  private _toolCallsCache?: ToolCallPart[];
+  private _hasMediaCache?: boolean;
+  private _hasThinkingCache?: boolean;
+
   constructor(
     role: Role,
     parts: MessagePart[] = [],
@@ -107,21 +115,21 @@ export class Message {
 
   addText(text: string): this {
     this.parts.push({ type: "text", text });
-    return this;
+    return this.invalidateCache();
   }
 
   addImage(url: string, mimeType?: string): this {
     const part: ImagePart = { type: "image", url };
     if (mimeType) part.mimeType = mimeType;
     this.parts.push(part);
-    return this;
+    return this.invalidateCache();
   }
 
   addAudio(url: string, mimeType?: string): this {
     const part: AudioPart = { type: "audio", url };
     if (mimeType) part.mimeType = mimeType;
     this.parts.push(part);
-    return this;
+    return this.invalidateCache();
   }
 
   addFile(
@@ -132,7 +140,7 @@ export class Message {
     if (options?.mimeType) part.mimeType = options.mimeType;
     if (options?.fileName) part.fileName = options.fileName;
     this.parts.push(part);
-    return this;
+    return this.invalidateCache();
   }
 
   setMeta(key: string, value: unknown): this {
@@ -283,44 +291,72 @@ export class Message {
   }
 
   // ========================
-  //  便捷 Getter
+  //  便捷 Getter（带懒缓存）
   // ========================
 
   /** 获取消息的文本内容（拼接所有 TextPart + ToolResultPart） */
   get text(): string {
-    return this.parts
-      .map((p) => {
-        if (p.type === "text") return p.text;
-        if (p.type === "tool_result") return p.result;
-        return "";
-      })
-      .filter((s) => s.length > 0)
-      .join("");
+    if (this._textCache !== undefined) return this._textCache;
+    let result = "";
+    for (const p of this.parts) {
+      if (p.type === "text") result += p.text;
+      else if (p.type === "tool_result") result += p.result;
+    }
+    this._textCache = result;
+    return result;
   }
 
   /** 获取所有 ToolCallPart */
   get toolCalls(): ToolCallPart[] {
-    return this.parts.filter((p): p is ToolCallPart => p.type === "tool_call");
+    if (this._toolCallsCache !== undefined) return this._toolCallsCache;
+    const result: ToolCallPart[] = [];
+    for (const p of this.parts) {
+      if (p.type === "tool_call") result.push(p);
+    }
+    this._toolCallsCache = result;
+    return result;
   }
 
   /** 获取思考/推理内容（拼接所有 ThinkingPart） */
   get thinking(): string {
-    return this.parts
-      .filter((p): p is ThinkingPart => p.type === "thinking")
-      .map((p) => p.text)
-      .join("");
+    if (this._thinkingCache !== undefined) return this._thinkingCache;
+    let result = "";
+    for (const p of this.parts) {
+      if (p.type === "thinking") result += p.text;
+    }
+    this._thinkingCache = result;
+    return result;
   }
 
   /** 是否包含思考内容 */
   get hasThinking(): boolean {
-    return this.parts.some((p) => p.type === "thinking");
+    if (this._hasThinkingCache !== undefined) return this._hasThinkingCache;
+    this._hasThinkingCache = this.parts.some((p) => p.type === "thinking");
+    return this._hasThinkingCache;
   }
 
   /** 是否包含媒体内容（图片/音频/文件） */
   get hasMedia(): boolean {
-    return this.parts.some(
+    if (this._hasMediaCache !== undefined) return this._hasMediaCache;
+    this._hasMediaCache = this.parts.some(
       (p) => p.type === "image" || p.type === "audio" || p.type === "file"
     );
+    return this._hasMediaCache;
+  }
+
+  /**
+   * 手动失效所有 getter 缓存。
+   *
+   * 当通过 addText/addImage/... 等内置方法修改时，缓存会自动失效；
+   * 但如果直接对 parts 数组进行 push/splice 等操作，请调用此方法。
+   */
+  invalidateCache(): this {
+    this._textCache = undefined;
+    this._thinkingCache = undefined;
+    this._toolCallsCache = undefined;
+    this._hasMediaCache = undefined;
+    this._hasThinkingCache = undefined;
+    return this;
   }
 
   // ========================

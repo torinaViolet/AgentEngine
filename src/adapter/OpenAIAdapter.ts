@@ -102,9 +102,22 @@ export class OpenAIAdapter implements MessageAdapter {
 
     // 文本内容
     const text = msg.text;
-    result.content = thinking && thinkingMode === "message"
-      ? `${thinkingPrefix}${thinking}\n\n${text}`
-      : text || null;
+    const composed =
+      thinking && thinkingMode === "message"
+        ? `${thinkingPrefix}${thinking}\n\n${text}`
+        : text;
+
+    // 当 assistant 仅有 tool_calls 而无文本时，用空字符串而非 null。
+    // —— OpenAI 标准对 null / "" / string 都接受，但部分 OpenAI 兼容代理
+    //    （尤其 Anthropic 的 OpenAI 兼容层）会因 content: null 而丢弃 tool_calls，
+    //    导致下一轮 tool_result 找不到对应的 tool_use。
+    if (composed) {
+      result.content = composed;
+    } else if (toolCalls.length > 0) {
+      result.content = "";
+    } else {
+      result.content = null;
+    }
 
     // 工具调用
     if (toolCalls.length > 0) {
@@ -133,28 +146,24 @@ export class OpenAIAdapter implements MessageAdapter {
       };
     }
 
-    // 多模态 → content 数组
-    const contentParts: unknown[] = [];
-
-    for (const part of msg.parts) {
-      switch (part.type) {
-        case "text":
-          contentParts.push({ type: "text", text: part.text });
-          break;
-        case "image":
-          contentParts.push(await this.serializeImagePart(part));
-          break;
-        case "audio":
-          contentParts.push(await this.serializeAudioPart(part));
-          break;
-        case "file":
-          contentParts.push(await this.serializeFilePart(part));
-          break;
-        default:
-          // tool_call / tool_result 不该出现在 user 消息里，跳过
-          break;
-      }
-    }
+    // 多模态 → content 数组（并行处理各 part 以加速多媒体解析）
+    const contentParts = (await Promise.all(
+      msg.parts.map(async (part): Promise<unknown> => {
+        switch (part.type) {
+          case "text":
+            return { type: "text", text: part.text };
+          case "image":
+            return await this.serializeImagePart(part);
+          case "audio":
+            return await this.serializeAudioPart(part);
+          case "file":
+            return await this.serializeFilePart(part);
+          default:
+            // tool_call / tool_result 不该出现在 user 消息里，跳过
+            return null;
+        }
+      })
+    )).filter((p) => p !== null);
 
     return {
       role: "user",
@@ -200,23 +209,35 @@ export class OpenAIAdapter implements MessageAdapter {
   }
 
   private async serializeFilePart(part: FilePart): Promise<unknown> {
-    // 文件作为文本附件或base64，目前以文本方式呈现
     const resolved = await this.resolver.resolve(part.url);
     const label = part.fileName || "file";
-    if (resolved.mimeType.startsWith("text/") || resolved.mimeType === "application/json") {
-      // 文本文件直接以文本形式展示
+    const mime = part.mimeType || resolved.mimeType;
+
+    // 文本文件：直接嵌入内容
+    if (mime.startsWith("text/") || mime === "application/json") {
       const text = Buffer.from(resolved.base64, "base64").toString("utf-8");
       return {
         type: "text",
         text: `[File: ${label}]\n${text}`,
       };
     }
-    // 二进制文件以 data URI 格式嵌入
+
+    // PDF：使用 OpenAI Chat Completions 的 file content part(GPT-4o 等支持 file_data)
+    if (mime === "application/pdf") {
+      return {
+        type: "file",
+        file: {
+          filename: label,
+          file_data: `data:${mime};base64,${resolved.base64}`,
+        },
+      };
+    }
+
+    // 其他二进制：用文本占位符提示模型；避免伪装为 image_url 触发模型解码失败
+    const approxBytes = Math.ceil(resolved.base64.length * 0.75);
     return {
-      type: "image_url",
-      image_url: {
-        url: `data:${resolved.mimeType};base64,${resolved.base64}`,
-      },
+      type: "text",
+      text: `[Attached binary file: ${label} (${mime}, ~${approxBytes} bytes) — content not inlined]`,
     };
   }
 

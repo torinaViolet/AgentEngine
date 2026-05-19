@@ -154,13 +154,21 @@ export class Session {
 
   /**
    * 获取所有叶子节点（所有分支的末端）
+   *
+   * 一次 DFS 遍历直接收集 leaves，避免「先全收集再 filter」的两次开销。
    */
   get allLeaves(): Message[] {
     const leaves: Message[] = [];
-    const all = traverseTree(this.root);
-    for (const node of all) {
-      if (node.isLeaf) {
+    const stack: Message[] = [this.root];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      if (node.children.length === 0) {
         leaves.push(node);
+        continue;
+      }
+      // 逆序入栈保证子节点按原顺序被访问
+      for (let i = node.children.length - 1; i >= 0; i--) {
+        stack.push(node.children[i]);
       }
     }
     return leaves;
@@ -273,6 +281,7 @@ export class Session {
     if (prompt) {
       this.root.parts.push({ type: "text", text: prompt });
     }
+    this.root.invalidateCache();
   }
 
   // ========================
@@ -285,6 +294,7 @@ export class Session {
   clear(): void {
     this.root.children.length = 0;
     this.root.parts.length = 0;
+    this.root.invalidateCache();
     this._cursor = this.root;
     this._cachedUsage = undefined;
     this._usageDirty = true;

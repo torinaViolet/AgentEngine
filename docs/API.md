@@ -136,6 +136,18 @@
 
 ---
 
+### Getter 缓存与 invalidateCache()
+
+Message 的便捷 Getter（`text`、`thinking`、`toolCalls`、`hasMedia`、`hasThinking`）采用懒计算缓存。
+通过 `addText`/`addImage`/`addAudio`/`addFile` 等链式方法修改时，缓存会自动失效；
+但如果直接对 `parts` 数组进行 `push`/`splice` 等操作，需要手动调用：
+
+| 方法 | 签名 | 说明 |
+| --- | --- | --- |
+| `invalidateCache` | `() => this` | 手动失效所有 getter 缓存 |
+
+---
+
 ### Role 枚举
 
 ```typescript
@@ -651,6 +663,7 @@ interface McpClientLike {
 | `snapshot`           | `Message`                   | 当前已组装的 Message 快照 |
 | `finishReason`       | `FinishReason \| undefined` | 模型完成原因            |
 | `hasSnapshotContent` | `boolean`                   | 是否已有内容            |
+| `usage`              | `Usage \| undefined`        | 流返回的 Token 用量（如有）  |
 
 ---
 
@@ -1098,6 +1111,30 @@ agent.on("my_event", (e) => { ... });
 | `setToolApproval`     | `(handler) => this`       | 设置工具审批函数 |
 | `setToolApprovalMode` | `(mode) => this`          | 设置审批模式   |
 | `setToolErrorPolicy`  | `(policy) => this`        | 设置工具错误策略 |
+
+> `setHandlerErrorHandler` 已从 AgentOptions 中移除，如需自定义 handler 错误处理，请在构造后调用该方法。
+
+---
+
+### Handler 错误处理 (since v0.2.0)
+
+当事件 handler 抛出异常时，默认行为是 `console.error` 记录。可通过以下 API 定制：
+
+| 方法 | 签名 | 说明 |
+| --- | --- | --- |
+| `setHandlerErrorHandler` | `(handler?) => this` | 设置 handler 错误的处理器，默认 `console.error`。传入 `undefined` 或不传参可恢复默认 |
+
+```typescript
+// 静默所有 handler 异常
+agent.setHandlerErrorHandler(() => {});
+
+// 自定义 logger
+agent.setHandlerErrorHandler((error, event) => {
+  logger.error(`Handler error [${event.type}]`, error);
+});
+```
+
+---
 
 #### 状态查询
 

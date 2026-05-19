@@ -354,6 +354,7 @@ const finalEvents = parser.finish(); // TEXT_DONE, THINKING_DONE, MESSAGE_DONE
 // 已组装的消息快照
 parser.snapshot;         // 当前 Message
 parser.finishReason;     // "stop" | "tool_calls" | ...
+parser.usage;           // 流返回的 Token 用量（如有 enable_usage）
 ```
 
 #### 事件类型

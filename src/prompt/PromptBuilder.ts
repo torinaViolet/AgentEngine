@@ -522,21 +522,40 @@ export class PromptBuilder {
   private applyInsertOps(result: Message[], ops: InsertOp[]): void {
     if (ops.length === 0) return;
 
-    // 排序策略：
-    // 1. 按插入索引降序（从后往前插入，避免索引偏移）
-    // 2. 同索引时，按 order 降序 + sequence 降序
-    //
-    // 注意：splice(index, 0, item) 会把后插入的 item 放到同 index 更前面，
-    // 因此这里用降序，最终呈现效果是 order 小的在前、注册早的在前。
+    // O(n + k log k)：升序排序后单次扫描构建新数组
+    // 排序规则：
+    // 1. 按插入索引升序
+    // 2. 同索引时按 order 升序、sequence 升序 —— 在该位置先 push 的排在前面
     ops.sort((a, b) => {
-      if (a.index !== b.index) return b.index - a.index;
-      if (a.order !== b.order) return b.order - a.order;
-      return b.sequence - a.sequence;
+      if (a.index !== b.index) return a.index - b.index;
+      if (a.order !== b.order) return a.order - b.order;
+      return a.sequence - b.sequence;
     });
 
-    for (const op of ops) {
-      result.splice(op.index, 0, op.message);
+    const merged: Message[] = new Array(result.length + ops.length);
+    let writeIdx = 0;
+    let opIdx = 0;
+
+    for (let i = 0; i <= result.length; i++) {
+      // 先把所有 index === i 的 ops 按序写入
+      while (opIdx < ops.length && ops[opIdx].index === i) {
+        merged[writeIdx++] = ops[opIdx].message;
+        opIdx++;
+      }
+      if (i < result.length) {
+        merged[writeIdx++] = result[i];
+      }
     }
+
+    // 兜底：若有 op.index 越界（>result.length），追加到末尾
+    while (opIdx < ops.length) {
+      merged[writeIdx++] = ops[opIdx].message;
+      opIdx++;
+    }
+
+    // 原地替换，避免外部引用失效
+    result.length = 0;
+    for (let i = 0; i < writeIdx; i++) result.push(merged[i]);
   }
 
   private applyOperations(messages: Message[]): Message[] {

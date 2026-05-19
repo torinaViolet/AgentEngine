@@ -147,26 +147,23 @@ export class AnthropicAdapter implements MessageAdapter {
   // ---- User 消息 ----
 
   private async serializeUserMessage(msg: Message): Promise<unknown> {
-    const content: unknown[] = [];
-
-    for (const part of msg.parts) {
-      switch (part.type) {
-        case "text":
-          content.push({ type: "text", text: part.text });
-          break;
-        case "image":
-          content.push(await this.serializeImageBlock(part));
-          break;
-        case "audio":
-          content.push(await this.serializeAudioBlock(part));
-          break;
-        case "file":
-          content.push(await this.serializeFileBlock(part));
-          break;
-        default:
-          break;
-      }
-    }
+    // 并行处理所有 part 以加速多媒体解析
+    const content = (await Promise.all(
+      msg.parts.map(async (part): Promise<unknown> => {
+        switch (part.type) {
+          case "text":
+            return { type: "text", text: part.text };
+          case "image":
+            return await this.serializeImageBlock(part);
+          case "audio":
+            return await this.serializeAudioBlock(part);
+          case "file":
+            return await this.serializeFileBlock(part);
+          default:
+            return null;
+        }
+      })
+    )).filter((c) => c !== null);
 
     return {
       role: "user",

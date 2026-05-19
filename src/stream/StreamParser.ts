@@ -1,6 +1,7 @@
 import { Message } from "../message/Message";
 import { Role } from "../message/Role";
 import { MessagePart } from "../message/MessagePart";
+import { Usage } from "../message/Usage";
 import {
   FinishReason,
   StreamEvent,
@@ -37,19 +38,26 @@ export class StreamParser {
   private _toolCalls: Map<number, ToolCallAccumulator> = new Map();
   private _finishReason?: FinishReason;
   private _finished: boolean = false;
+  private _usage?: Usage;
 
   //========================
   //喂入Chunk
   // ========================
 
   /**
-   * 喂入一个 OpenAI stream chunk，返回本次产出的事件
-   */
+ * 喂入一个 OpenAI stream chunk，返回本次产出的事件
+ */
   feed(chunk: any): StreamEvent[] {
     const events: StreamEvent[] = [];
 
     try {
-      const choices = chunk.choices;
+      // 先处理 usage —— OpenAI stream 启用 include_usage 时，
+      // 最后一个 chunk 通常 choices 为空但 usage 有值，必须先于 choices 短路捕获。
+      if (chunk?.usage) {
+        this._usage = Usage.fromRaw(chunk.usage);
+      }
+
+      const choices = chunk?.choices;
       if (!choices || choices.length === 0) return events;
 
       const choice = choices[0];
@@ -150,7 +158,7 @@ export class StreamParser {
    */
   finish(): StreamEvent[] {
     if (this._finished) return [];
-this._finished = true;
+    this._finished = true;
 
     const events: StreamEvent[] = [];
 
@@ -215,19 +223,25 @@ this._finished = true;
       this._toolCalls.size > 0;
   }
 
+  /** 当前累积的 Usage（如流尚未传回则为 undefined） */
+  get usage(): Usage | undefined {
+    return this._usage;
+  }
+
   // ========================
   //  重置
   // ========================
 
   /**
-   * 重置解析器状态，可复用于下一轮
-   */
+ * 重置解析器状态，可复用于下一轮
+ */
   reset(): void {
     this._thinkingBuffer = "";
     this._textBuffer = "";
     this._toolCalls.clear();
     this._finishReason = undefined;
     this._finished = false;
+    this._usage = undefined;
   }
 
   // ========================
@@ -257,6 +271,10 @@ this._finished = true;
       });
     }
 
-    return new Message(Role.Assistant, parts);
+    const msg = new Message(Role.Assistant, parts);
+    if (this._usage) {
+      msg.usage = this._usage;
+    }
+    return msg;
   }
 }
