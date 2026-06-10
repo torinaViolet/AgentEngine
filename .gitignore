@@ -5,13 +5,14 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+/.npm-cache
 /.pnp
 .pnp.js
 
 .vscode/*
 
 # 测试文件
-/test
+/.test-dist
 
 # 构建产物
 /dist

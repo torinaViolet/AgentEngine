@@ -1,6 +1,6 @@
 {
   "name": "@notic/agent-engine",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A lightweight, elegant, and feature-complete TypeScript AI Agent framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,12 +13,15 @@
   "sideEffects": false,
   "files": [
     "dist",
+    "docs",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
     "clean": "rimraf dist",
+    "test": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/**/*.test.js",
+    "test:real:deepseek": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/test/agent/agent.real.test.js",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [

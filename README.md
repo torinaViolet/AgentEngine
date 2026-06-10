@@ -1,726 +1,292 @@
-# ⚡ AgentEngine
+# AgentEngine
 
-一个轻量、优雅、功能完整的 TypeScript AI Agent 框架。
+AgentEngine 是一个轻量、模块化、可测试的 TypeScript AI Agent 框架。
 
-> **简单的事情简单做，复杂的事情也能做。**
+它的目标不是把所有能力塞进一个黑盒，而是把 Agent 拆成清晰的模块：消息、会话、工具、流式解析、提示词构建、请求配置、平台适配和自动循环。你可以直接使用完整的 `Agent`，也可以单独拿其中某个模块来构建自己的系统。
 
-```typescript
-const agent = new Agent({ client, model: "gpt-4o", session: Session.create("你是AI助手") });
-agent.on(StreamEventType.TEXT_DELTA, (e) => process.stdout.write(e.delta));
-await agent.run("你好");
+> 简单的事情简单做，复杂的事情也能拆开做。
+
+```ts
+import OpenAI from "openai";
+import { Agent, Session, StreamEventType } from "@notic/agent-engine";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const agent = new Agent({
+  client,
+  model: "gpt-4o-mini",
+  session: Session.create("你是一个简洁可靠的助手。"),
+});
+
+agent.on(StreamEventType.TEXT_DELTA, (event) => {
+  process.stdout.write(event.delta);
+});
+
+const reply = await agent.run("用一句话介绍 AgentEngine。");
+console.log(reply.text);
 ```
 
----
+## 适合做什么
 
-## ✨ 核心特性
+- 构建带工具调用的 AI Agent
+- 管理多轮对话、分支会话和可恢复上下文
+- 把 OpenAI-compatible、Anthropic、Gemini 等平台统一到同一套消息模型
+- 解析模型 stream，并把文本、思考内容、工具调用转换成结构化事件
+- 用声明式规则动态注入提示词和运行时上下文
+- 为 Agent 各模块编写可控的单元测试和 fake client 测试
 
-- 🌳 **树结构会话管理** — 天然支持对话分支、回退、分页导航
-- 🔧 **工具生命周期钩子** — ON_CREATE → ON_VALIDATE → BEFORE_EXECUTE → AFTER_EXECUTE → ON_SERIALIZE / ON_ERROR
-- 🌊 **流式解析器** — 无状态纯函数设计，结构化事件驱动
-- 📝 **提示词构建器** — 声明式注入规则 + 数组操作管线 + 生命周期 + 概率触发
-- ⚙️ **请求参数配置器** — 预设模式 + 链式构建 + 三层优先级合并
-- 🔌 **MCP 原生集成** — 一行代码接入，与手动工具完全同构
-- 🎨 **多模态支持** — 图片 / 音频 / 文件，媒体资源懒加载
-- 💭 **思考内容提取** — 兼容 DeepSeek / Qwen / Claude / Gemini 的推理过程
-- 🔄 **多平台适配器** — OpenAI / Anthropic / Gemini，统一消息模型，一个接口换平台
-- 🛡️ **工具审批机制** — 自动 / 手动 / 自定义审批，支持超时策略
-- ⏸️ **中断与恢复** — 支持中断当前运行并从断点恢复
+## 核心特性
 
----
+- **模块化架构**：`Message`、`Session`、`Tool`、`Stream`、`Prompt`、`Config`、`Adapter`、`Agent` 都可以单独使用。
+- **统一消息模型**：支持文本、图片、音频、文件、工具调用、工具结果和 thinking 内容。
+- **树形会话管理**：天然支持对话分支、回退、分页、查询和插入。
+- **工具系统**：Builder 风格定义工具，自动生成 JSON Schema，支持生命周期 Hook、MCP 和错误策略。
+- **流式事件**：把模型 stream 解析成 `TEXT_DELTA`、`TOOL_CALL_*`、`MESSAGE_DONE` 等事件。
+- **提示词构建器**：用 `Rule` 定位消息，再注入临时上下文；也支持数组操作管线。
+- **请求配置器**：链式构建 temperature、top_p、max_tokens、response_format 等参数。
+- **多平台适配**：内置 OpenAI、Anthropic、Gemini 适配器；OpenAI Adapter 可用于 DeepSeek、Qwen、Kimi、GLM 等兼容平台。
+- **中断与恢复**：支持 abort、timeout、partial message、continue 和 resume。
+- **工具审批**：支持自动审批、自定义审批、手动审批和审批超时策略。
 
-## 📦 架构总览
-
-```
-AgentEngine
-├── 📨 Message       统一消息模型（多模态 + 树结构）
-├── 🔌 Adapter       消息序列化适配器（OpenAI / Anthropic / Gemini）
-├── 🖼️ Media         媒体资源懒加载解析器
-├── 💬 Session       会话管理（树结构 + 分支 + 分页）
-├── 🔧 Tool          工具系统（Builder + 生命周期钩子 + MCP）
-├── 🌊 Stream        流式解析器（纯函数 + 结构化事件）
-├── 📝 Prompt        提示词构建器（声明式注入 + 数组操作管线）
-├── ⚙️ Config        请求参数配置器（预设 + 链式构建）
-└── 🤖 Agent         智能体编排层（串联一切 + 自动循环 + 审批 + 中断恢复）
-```
-
----
-
-## 🚀 快速开始
-
-### 安装
+## 安装
 
 ```bash
 npm install @notic/agent-engine
 ```
 
-#### Peer Dependencies
-
-根据你使用的平台，安装对应的客户端 SDK：
+根据你使用的平台安装对应 SDK：
 
 ```bash
-# OpenAI / DeepSeek / Qwen 等 OpenAI 兼容平台
+# OpenAI / DeepSeek / Qwen / Kimi 等 OpenAI-compatible 平台
 npm install openai
 
-# MCP 集成（可选）
+# MCP 集成，可选
 npm install @modelcontextprotocol/sdk
 ```
 
-### 最简示例
+环境要求：
 
-```typescript
-import { Agent, Session, StreamEventType } from "@notic/agent-engine";
-import { OpenAI } from "openai";
+- Node.js >= 18
+- TypeScript 项目推荐开启 `strict`
 
-const client = new OpenAI({ apiKey: "sk-...", baseURL: "..." });
+## 快速开始
+
+### 1. 创建 Agent
+
+```ts
+import OpenAI from "openai";
+import { Agent, RequestConfig, Session } from "@notic/agent-engine";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: "https://api.openai.com/v1",
+});
 
 const agent = new Agent({
   client,
-  model: "gpt-4o",
-  session: Session.create("你是一个友好的AI助手"),
+  model: "gpt-4o-mini",
+  session: Session.create("你是一个友好的中文助手。"),
+  config: RequestConfig.create().temperature(0.3).maxTokens(1024),
+});
+```
+
+OpenAI-compatible 平台只需要替换 `baseURL` 和 `model`：
+
+```ts
+const client = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com",
+});
+```
+
+### 2. 监听流式输出
+
+```ts
+import { StreamEventType } from "@notic/agent-engine";
+
+agent.on(StreamEventType.TEXT_DELTA, (event) => {
+  process.stdout.write(event.delta);
 });
 
-agent.on(StreamEventType.TEXT_DELTA, (e) => process.stdout.write(e.delta));
+agent.on(StreamEventType.TOOL_EXECUTE_START, (event) => {
+  console.log("tool:", event.name);
+});
+```
 
-const reply = await agent.run("你好！");
+### 3. 运行一轮对话
+
+```ts
+const reply = await agent.run("帮我写一个 npm 包介绍。");
 console.log(reply.text);
 ```
 
----
+`Agent` 会自动把用户消息和助手回复写入 `Session`。
 
-## 📖 模块详解
+## 工具调用示例
 
-### 📨 Message — 统一消息模型
+```ts
+import { Agent, Param, Session, Tool, ToolKit } from "@notic/agent-engine";
 
-树结构消息模型，支持多模态内容，天然支持对话分支。
-
-```typescript
-// 创建消息
-const msg = Message.user("你好");
-const msg = Message.system("你是AI助手");
-const msg = Message.assistant("你好！");
-
-// 多模态
-const msg = Message.user("看看这张图")
-  .addImage("https://example.com/photo.jpg")
-  .addFile("./data.csv")
-  .tag("multimodal")
-  .setMeta("priority", "high");
-
-// 便捷 Getter
-msg.text;         // 文本内容
-msg.thinking;     // 思考/推理内容
-msg.toolCalls;    // 工具调用列表
-msg.hasMedia;     // 是否含媒体
-msg.hasThinking;  // 是否含思考
-
-// 树结构
-msg.parent;       // 父节点
-msg.children;     // 子节点列表
-msg.getHistory(); // 从根到当前的路径
-msg.depth;        // 在树中的深度
-msg.isRoot;       // 是否根节点
-msg.isLeaf;       // 是否叶子节点
-
-// 序列化与反序列化
-const json = msg.toJSON();
-const restored = Message.fromJSON(json);
-```
-
-#### 消息内容类型 (MessagePart)
-
-| 类型               | 说明                        |
-| ---------------- | ------------------------- |
-| `TextPart`       | 文本内容                      |
-| `ImagePart`      | 图片（URL / data URI / 本地路径） |
-| `AudioPart`      | 音频                        |
-| `FilePart`       | 文件附件                      |
-| `ToolCallPart`   | LLM 发起的工具调用               |
-| `ToolResultPart` | 工具执行结果                    |
-| `ThinkingPart`   | 模型推理/思考过程                 |
-
-### 💬 Session — 会话管理
-
-基于树结构的会话管理器，通过光标（cursor）追踪当前对话位置。
-
-```typescript
-const session = Session.create("你是AI助手");
-
-// 基本对话
-session.addUser("你好");
-session.addAssistant(reply);
-const history = session.history(); // [System, User, Assistant]
-
-// 分支对话 — 回退并分叉
-const branchPoint = session.cursor.parent;
-session.rewind(branchPoint);
-session.addUser("换个话题"); // 自动产生新分支
-
-// 分支导航
-session.allLeaves;   // 所有分支末端
-session.branches;    // 所有分支路径
-
-// 分页器 — 在分支间切换
-const pag = session.paginators[0];
-pag.next();          // 下一个分支
-pag.prev();          // 上一个分支
-pag.goTo(2);         // 跳转到第3个分支
-pag.total;           // 总分支数
-
-// 系统提示词
-session.systemPrompt = "新的系统提示";
-
-// Token 统计
-session.totalUsage;  // 全树累计 Usage（带缓存）
-
-// 序列化
-const json = session.toJSON();
-const restored = Session.fromJSON(json);
-```
-
-#### Inserter — 命令式插入器
-
-游标式插入器，通过移动光标定位插入点，支持事务提交。执行后自动报废。
-
-```typescript
-const inserter = session.inserter;
-
-inserter
-  .top()        // 光标移到顶部
-  .insertAssistantAfter("注入内容")  // 在光标后插入
-  .execute();                       // 事务提交
-
-// 按标签定位
-inserter
-  .moveByTags(["context"])
-  .insertUserBefore("补充信息")
-  .execute();
-
-// 按内容定位
-inserter
-  .moveByContent(["关键词"])
-  .insertAfter(Message.system("补充上下文"))
-  .execute();
-```
-
-#### Query — 查询系统
-
-```typescript
-const query = session.query;
-
-// 在当前分支 / 全树中查找
-query.findByContent(["天气"], { scope: "branch" });
-query.findByTags(["important"], { scope: "tree" });
-query.findByRole(Role.User);
-query.findFirst({ content: ["关键词"] });
-query.findLast({ tags: ["context"] });
-
-// 自定义规则
-query.findBy((msg) => msg.hasThinking, "tree");
-```
-
-### 🔧 Tool — 工具系统
-
-Builder 模式定义工具，完整的生命周期钩子。
-
-```typescript
-const weatherTool = Tool.create(async (args, ctx) => {
-    ctx.throwIfAborted(); // 支持中断检查
-    const city = args.city as string;
-    return await fetchWeather(city);
-  })
+const getWeather = Tool.create(async (args) => {
+  return {
+    city: args.city,
+    temperature: 21,
+    unit: "celsius",
+  };
+})
   .name("get_weather")
-  .description("获取指定城市的天气")
+  .description("查询城市天气")
   .params(
-    Param.string("city").desc("城市名称").required(),
-    Param.string("unit").desc("温度单位").enum(["celsius", "fahrenheit"]),
+    Param.string("city").desc("城市名称").required()
   )
-  // 生命周期钩子
-  .on(Hook.BEFORE_EXECUTE, (ctx) => {
-    console.log(`即将查询: ${ctx.arguments.city}`);
-    // ctx.cancel("理由") 可取消执行
-  })
-  .on(Hook.AFTER_EXECUTE, (ctx) => {
-    // 可改写结果
-    ctx.result = { ...ctx.result, cached: true };
-  })
-  .on(Hook.ON_ERROR, (ctx) => {
-    // 错误降级
-    ctx.result = "天气服务暂不可用";
-  })
-  .on(Hook.ON_SERIALIZE, (ctx) => {
-    // 自定义返回给 LLM 的内容
-  })
   .build();
-```
 
-#### 参数定义
+const toolkit = new ToolKit().add(getWeather);
 
-支持嵌套对象与数组：
-
-```typescript
-// 嵌套对象
-Param.object("address", [
-  Param.string("city").desc("城市").required(),
-  Param.object("geo", [
-    Param.number("lat").desc("纬度").required(),
-    Param.number("lng").desc("经度").required(),
-  ]),
-]);
-
-// 对象数组
-Param.array("items", [
-  Param.string("name").desc("名称").required(),
-  Param.number("count").desc("数量"),
-]);
-```
-
-#### 生命周期
-
-```
-ON_CREATE → ON_VALIDATE → BEFORE_EXECUTE → execute → AFTER_EXECUTE → ON_SERIALIZE
-                                              ↓
-                                          ON_ERROR
-```
-
-> **注意**：`ON_CREATE` 和 `ON_VALIDATE` 中的异常也会触发 `ON_ERROR`。整个生命周期共享同一个 `Context` 实例。
-
-#### ToolKit — 工具包管理
-
-```typescript
-const toolkit = new ToolKit()
-  .add(weatherTool, searchTool);
-
-// MCP 一行接入
-await toolkit.addMCP(mcpClient);
-
-// 传给 LLM
-const tools = toolkit.schemas;
-
-// 执行
-const result = await toolkit.execute(toolCallPart);
-const results = await toolkit.executeAll(toolCallParts);
-
-// 执行选项
-const result = await toolkit.execute(toolCallPart, {
-  signal: abortController.signal,
-  errorPolicy: "return_to_model", // 或 "throw"
-});
-```
-
-#### MCP 集成
-
-```typescript
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-
-const transport = new StdioClientTransport({
-  command: "npx",
-  args: ["-y", "@modelcontextprotocol/server-filesystem", "./"],
-});
-
-const mcpClient = new Client({ name: "my-app", version: "1.0.0" });
-await mcpClient.connect(transport);
-
-const toolkit = new ToolKit();
-await toolkit.addMCP(mcpClient); // 自动发现所有工具，与手动工具完全同构
-```
-
-### 🌊 Stream — 流式解析器
-
-无状态纯函数设计，将 OpenAI 流式 chunk 解析为结构化事件。
-
-```typescript
-const parser = new StreamParser();
-
-for await (const chunk of stream) {
-  const events = parser.feed(chunk);
-  for (const event of events) {
-    switch (event.type) {
-      case StreamEventType.THINKING_DELTA:
-        process.stdout.write(event.delta);  // 思考过程
-        break;
-      case StreamEventType.TEXT_DELTA:
-        process.stdout.write(event.delta);  // 文本增量
-        break;
-      case StreamEventType.TOOL_CALL_START:
-        console.log(`工具: ${event.name}`);
-        break;
-    }
-  }
-}
-
-const finalEvents = parser.finish(); // TEXT_DONE, THINKING_DONE, MESSAGE_DONE
-
-// 已组装的消息快照
-parser.snapshot;         // 当前 Message
-parser.finishReason;     // "stop" | "tool_calls" | ...
-parser.usage;           // 流返回的 Token 用量（如有 enable_usage）
-```
-
-#### 事件类型
-
-| 事件                       | 说明      |
-| ------------------------ | ------- |
-| `THINKING_DELTA`         | 思考/推理增量 |
-| `THINKING_DONE`          | 思考完成    |
-| `TEXT_DELTA`             | 文本增量    |
-| `TEXT_DONE`              | 文本完成    |
-| `TOOL_CALL_START`        | 工具调用开始  |
-| `TOOL_CALL_DELTA`        | 工具参数增量  |
-| `TOOL_CALL_DONE`         | 工具调用完成  |
-| `TOOL_APPROVAL_REQUIRED` | 工具需要审批  |
-| `TOOL_APPROVAL_ACCEPTED` | 审批通过    |
-| `TOOL_APPROVAL_REJECTED` | 审批拒绝    |
-| `TOOL_EXECUTE_START`     | 工具执行开始  |
-| `TOOL_EXECUTE_DONE`      | 工具执行完成  |
-| `TOOL_EXECUTE_ERROR`     | 工具执行失败  |
-| `MESSAGE_DONE`           | 消息组装完成  |
-| `TURN_START`             | 新一轮循环开始 |
-| `TURN_END`               | 一轮循环结束  |
-| `ERROR`                  | 错误      |
-
-### 📝 PromptBuilder — 提示词构建器
-
-声明式注入规则，在不修改原始 Session 的情况下向上下文注入临时消息。
-
-```typescript
-const builder = new PromptBuilder();
-
-// 注入时间感知（永久）
-builder.injectSystem(Rule.top().after(), "当前时间：2025年7月16日");
-
-// 注入临时约束（只生效3轮）
-builder.injectSystem(
-  Rule.byRole(Role.User).last().before(),
-  "请用英文回复",
-  3 // life = 3
-);
-
-// 概率触发（50%概率注入）
-builder.injectSystem(
-  Rule.bottom().before(),
-  "添加一个有趣的彩蛋",
-  { life: -1, probability: 0.5 }
-);
-
-// 带优先级的注入
-builder.injectSystem(
-  Rule.top().after(),
-  "高优先级内容",
-  { life: -1, priority: 0 } // 越小越先执行
-);
-
-// 构建最终上下文
-const context = builder.build(session.history());
-// 原始 session 不受影响
-```
-
-#### 数组操作管线
-
-除了声明式注入，还支持对消息数组进行管线操作：
-
-```typescript
-// 过滤、截取、自由变换
-builder
-  .filter((msg) => msg.role !== Role.Tool, "remove-tool")  // 按条件过滤
-  .slice(-10, undefined, "keep-recent")                     // 只保留最近10条
-  .removeWhere((msg) => msg.hasTag("temp"), "clean-temp")   // 移除临时消息
-  .map((msg) => { /* 变换 */ return msg; }, "transform")     // 映射变换
-  .transform((msgs) => { /* 自由变换 */ return msgs; });       // 完全自定义
-
-// 按标签管理操作
-builder.removeOperation("remove-tool"); // 移除指定操作
-builder.clearOperations();               // 清空所有操作
-```
-
-#### 构建策略
-
-```typescript
-// batch（默认）：所有 Injection 基于原始 history 定位
-builder.build(history, { strategy: "batch" });
-
-// immediate：后续 Injection 可看到前序 Injection 的插入结果
-builder.build(history, { strategy: "immediate" });
-```
-
-#### Rule — 声明式定位规则
-
-```typescript
-// 位置定位
-Rule.top().after()                  // 第一条之后
-Rule.bottom().before()              // 最后一条之前
-Rule.index(2).after()               // 第3条之后
-Rule.index(-1).before()             // 倒数第1条之前
-
-// 角色定位
-Rule.byRole(Role.User).last().before()     // 最后一条 User 之前
-Rule.byRole(Role.User).first().after()     // 第一条 User 之后
-Rule.byRole(Role.User).all().before()      // 每条 User 之前
-
-// 内容/标签定位
-Rule.byContent(["天气"]).after()
-Rule.byTags(["context"]).before()
-Rule.by((msg, idx) => msg.hasTag("inject-point")).after()
-
-// 扫描深度 + 方向
-Rule.byContent(["关键词"]).scanDepth(5).scanReverse().after()   // 只扫描最近5条
-Rule.byContent(["关键词"]).scanDepth(10).scanForward().after()  // 只扫描前10条
-
-// 排序（同位置多条注入）
-Rule.top().after().order(1)   // 排在前面
-Rule.top().after().order(2)   // 排在后面
-
-// 偏移
-Rule.byRole(Role.System).first().offset(1).after()
-```
-
-#### 生命周期 & 概率
-
-```typescript
-// life = -1  → 永久
-// life = N   → 剩余N次，每次 build 后递减
-// life = 0   → 已过期，跳过
-
-const inj = builder.inject(rule, message, { life: 5, probability: 0.8 });
-
-inj.enabled;       // 手动开关
-inj.life;          // 剩余次数
-inj.isActive;      // 存活且启用
-inj.probability;   // 触发概率
-
-builder.disable(inj);   // 暂停（不消耗 life）
-builder.enable(inj);    // 恢复
-builder.prune();         // 清理过期注入
-
-// 查询
-builder.aliveCount;      // 存活注入数
-builder.activeCount;     // 活跃注入数
-builder.expiredCount;    // 过期注入数
-```
-
-### ⚙️ RequestConfig — 请求参数配置器
-
-```typescript
-// 预设模式
-const config = RequestConfig.precise();    // 低温度、低随机
-const config = RequestConfig.balanced();   // 适中
-const config = RequestConfig.creative();   // 高温度、高创意
-
-// 链式配置
-const config = RequestConfig.create()
-  .temperature(0.8)
-  .topP(0.95)
-  .topK(40)
-  .maxTokens(2048)
-  .frequencyPenalty(0.1)
-  .presencePenalty(0.2)
-  .stop("n", "END")
-  .seed(42)
-  .responseFormat("json_object")
-  .set("custom_key", value);  // 自定义参数
-
-// 操作
-const cloned = config.clone();
-const merged = base.merge(override);   // override 优先
-const params = config.build();          // → Record<string, unknown>
-```
-
-#### 参数优先级
-
-```
-RequestConfig（最低） → requestOptions → run()的 options（最高）
-```
-
-### 🤖 Agent — 智能体
-
-串联所有组件，实现完整的 Agent 循环。
-
-```typescript
 const agent = new Agent({
-  client,                           // OpenAI 兼容客户端
-  model: "gpt-4o",                  // 模型名
-  session: Session.create("..."),   // 会话
-  toolkit,                          // 工具包（可选）
-  promptBuilder,                    // 提示词构建器（可选）
-  config: RequestConfig.balanced(), // 请求配置（可选）
-  adapter: new OpenAIAdapter(),     // 适配器（可选，默认 OpenAI）
-  maxTurns: 10,                     // 最大循环轮次（可选）
-  toolApproval: async (req) => {    // 工具审批（可选）
-    return confirm(`允许执行 ${req.name}?`);
-  },
-  toolErrorPolicy: "return_to_model", // 工具错误策略（可选）
+  client,
+  model: "your-model",
+  session: Session.create("需要外部信息时可以调用工具。"),
+  toolkit,
 });
 
-// 事件监听（类型安全）
-agent
-  .on(StreamEventType.THINKING_DELTA, (e) => { /* 思考增量 */ })
-  .on(StreamEventType.TEXT_DELTA, (e) => { /* 文本增量 */ })
-  .on(StreamEventType.TOOL_CALL_START, (e) => { /* 工具调用 */ })
-  .on(StreamEventType.TOOL_EXECUTE_DONE, (e) => { /* 工具结果 */ })
-  .on(StreamEventType.TOOL_APPROVAL_REQUIRED, (e) => { /* 等待审批 */ });
-
-// 运行
-const reply = await agent.run("你好");
-reply.text;       // 回复文本
-reply.thinking;   // 思考内容
-reply.usage;      // Token 用量
-reply.toolCalls;  // 工具调用
+const reply = await agent.run("北京今天适合跑步吗？");
+console.log(reply.text);
 ```
 
-#### 多种运行方式
+当模型发起工具调用时，AgentEngine 会自动执行工具、把结果写回会话，并再次请求模型生成最终答案。
 
-```typescript
-// 标准运行
-const reply = await agent.run("你好");
+## 模块地图
 
-// 传入任意消息运行
-const reply = await agent.runWith(Message.user("你好").addImage("photo.jpg"));
-
-// 直接传入消息列表运行（不走 Session）
-const reply = await agent.runRaw(messages);
-
-// 运行选项
-const reply = await agent.run("你好", {
-  signal: abortController.signal,  // 中断信号
-  timeoutMs: 30000,                // 超时时间
-});
+```text
+AgentEngine
+├─ Message   统一消息模型：文本、多模态、工具调用、树节点
+├─ Session   会话树：历史、分支、查询、插入、分页
+├─ Tool      工具系统：Param、Tool、ToolKit、Hook、MCP
+├─ Stream    流式解析：chunk -> 结构化事件 -> Message
+├─ Prompt    提示词构建：Rule、Injection、数组操作管线
+├─ Config    请求参数：预设、链式配置、三层优先级
+├─ Adapter   平台适配：OpenAI、Anthropic、Gemini
+├─ Media     媒体解析：data URI、HTTP、本地文件
+└─ Agent     编排层：自动循环、审批、中断、恢复
 ```
 
-#### 中断与恢复
+### Message
 
-```typescript
-// 中断
-agent.abort("用户取消");
+统一消息对象，支持：
 
-// 恢复运行
-if (agent.canResume) {
-  const reply = await agent.resume();
-}
+- `Message.user()` / `Message.assistant()` / `Message.system()`
+- 文本、图片、音频、文件
+- 工具调用和工具结果
+- thinking 内容
+- 标签、元数据和树结构
 
-// 继续对话（自动判断恢复或继续）
-const reply = await agent.continue({ prompt: "继续" });
+### Session
+
+会话管理器，负责：
+
+- root -> cursor 的当前历史路径
+- 对话分支和回退
+- 查询当前分支或全树
+- 在历史中插入消息
+- 在兄弟分支间分页切换
+
+### Tool
+
+工具系统，负责：
+
+- 用 `Param` 定义参数 schema
+- 用 `Tool` 包装 TypeScript 函数
+- 用 `ToolKit` 注册并执行多个工具
+- 用 Hook 处理校验、取消、结果改写和错误降级
+
+### Stream
+
+流式解析器，负责：
+
+- 文本增量
+- thinking / reasoning 增量
+- 工具调用增量
+- usage
+- 最终 `Message` 组装
+
+### Prompt
+
+提示词构建器，负责：
+
+- 按角色、标签、内容或自定义规则定位消息
+- 动态注入 system/user/assistant 消息
+- 控制注入生命周期、概率和优先级
+- 在发送模型前过滤、裁剪或转换上下文
+
+### Config
+
+请求参数配置器，负责：
+
+- temperature / top_p / top_k
+- max_tokens
+- stop
+- seed
+- response_format
+- 自定义平台参数
+
+### Adapter
+
+平台适配器，负责：
+
+- 把 AgentEngine 的 `Message[]` 序列化成平台请求格式
+- 处理多模态内容
+- 处理工具调用和工具结果
+- 控制 thinking 内容如何回传
+
+### Agent
+
+智能体编排层，负责：
+
+- 管理 `Session`
+- 调用模型 stream
+- 派发事件
+- 执行工具循环
+- 处理工具审批
+- 中断、超时、恢复和继续
+
+## 文档
+
+完整教程式 API 文档见：
+
+- [docs/API.md](./docs/API.md)
+
+建议阅读顺序：
+
+1. 安装与最小示例
+2. Agent：智能体编排
+3. Tool：工具系统
+4. Prompt：提示词构建
+5. Session：会话树
+6. Adapter / Media：平台与多模态适配
+
+## 测试
+
+项目使用 Node.js 内置测试运行器。
+
+```bash
+npm test
 ```
 
-#### 工具审批
+真实 API 测试需要显式开启，避免普通测试误触发外部请求：
 
-```typescript
-// 方式一：自动审批（handler 函数）
-agent.setToolApproval(async (req) => {
-  if (req.name === "dangerous_tool") return false;
-  return true;
-});
-
-// 方式二：手动审批模式
-agent.setToolApprovalMode("manual");
-agent.on(StreamEventType.TOOL_APPROVAL_REQUIRED, (e) => {
-  // 外部 UI 展示审批请求
-  showApprovalDialog(e.approvalId, e.name);
-});
-// 用户操作后
-agent.approve(approvalId);
-agent.reject(approvalId, "不允许");
+```bash
+RUN_REAL_DEEPSEEK_TESTS=1 DEEPSEEK_API_KEY=sk-... npm run test:real:deepseek
 ```
 
-#### 自动循环
+## 构建
 
-`agent.run()` 自动完成：
-
-```
-用户输入 → Session.addUser
-         → PromptBuilder.build（注入）
-         → Adapter.serialize（序列化）
-         → LLM 流式调用
-         → StreamParser 解析
-         → 有 tool_calls?
-             → 工具审批（auto / manual / handler）
-             → ToolKit.execute → 结果回传 → 再次调用 LLM
-         → 无 tool_calls → Session.addAssistant → 返回结果
+```bash
+npm run build
 ```
 
----
+## License
 
-## 🔌 Adapter — 适配器
-
-通过实现 `MessageAdapter` 接口适配不同 API 平台：
-
-```typescript
-interface MessageAdapter {
-  readonly capabilities?: AdapterCapabilities;
-  serialize(messages: Message[], options?: SerializeOptions): Promise<SerializedResult>;
-  deserialize(raw: unknown): Message;
-}
-```
-
-### 内置适配器
-
-| 平台               | 适配器                | 说明                  |
-| ---------------- | ------------------ | ------------------- |
-| OpenAI           | `OpenAIAdapter`    | 支持所有 OpenAI 兼容 API  |
-| DeepSeek         | `OpenAIAdapter`    | OpenAI 兼容           |
-| 通义千问 (Qwen)      | `OpenAIAdapter`    | OpenAI 兼容           |
-| Kimi (Moonshot)  | `OpenAIAdapter`    | OpenAI 兼容           |
-| GLM (智谱)         | `OpenAIAdapter`    | OpenAI 兼容           |
-| MiniMax          | `OpenAIAdapter`    | OpenAI 兼容           |
-| Anthropic Claude | `AnthropicAdapter` | 原生 Claude API 适配    |
-| Google Gemini    | `GeminiAdapter`    | 原生 Gemini API 适配    |
-
-### 思考内容序列化
-
-通过 `SerializeOptions.thinking` 控制思考内容的回传方式：
-
-```typescript
-await agent.run("你好", {
-  serializeOptions: {
-    thinking: {
-      mode: "auto",    // "none" | "native" | "message" | "auto"
-      scope: "last",   // "none" | "last" | "tool_call" | "all"
-    }
-  }
-});
-```
-
-各模型思考字段兼容：
-
-| 模型                | 字段名                 | 支持  |
-| ----------------- | ------------------- |:---:|
-| DeepSeek Reasoner | `reasoning_content` | ✅   |
-| Qwen (思考模式)       | `reasoning_content` | ✅   |
-| Claude (thinking) | `thinking` block    | ✅   |
-| Gemini (thinking) | `thought: true`     | ✅   |
-
----
-
-## 📂 模块结构
-
-```
-@notic/agent-engine
-├── message/          统一消息模型（树结构 + 多模态 + 序列化）
-├── adapter/          消息序列化适配器（OpenAI / Anthropic / Gemini）
-├── media/            媒体资源懒加载解析器
-├── session/          会话管理（树结构 + 分支 + 分页 + 插入器 + 查询）
-├── tool/             工具系统（Builder + 生命周期钩子 + MCP + 审批）
-├── stream/           流式解析器（纯函数 + 结构化事件）
-├── prompt/           提示词构建器（声明式注入 + 数组操作管线）
-├── config/           请求参数配置器（预设 + 链式构建）
-├── agent/            智能体编排层（串联一切 + 自动循环 + 中断恢复）
-└── utils/            工具函数
-```
-
----
-
-## 📖 API 文档
-
-完整的 API 参考文档请查看 [docs/API.md](./docs/API.md)。
-
----
-
-## 🌍 环境要求
-
-- Node.js >= 18.0.0
-- TypeScript >= 5.5（推荐）
-
----
-
-## 📄 License
-
-[Apache-2.0](./LICENSE)
+Apache-2.0
