@@ -300,7 +300,91 @@ describe("ToolKit", () => {
     });
 
     assert.match(unknown.text, /missing|未知|鏈煡/);
-    assert.equal(invalidArgs.text, "{\"error\":\"not ok\"}");
+    assert.match(invalidArgs.text, /invalid_tool_arguments/);
+    assert.match(invalidArgs.text, /JSON/);
+
+    await assert.rejects(
+      () => toolkit.execute({
+        type: "tool_call",
+        toolCallId: "call_unknown_throw",
+        name: "missing",
+        arguments: "{}",
+      }, { errorPolicy: "throw" }),
+      ToolExecutionError
+    );
+  });
+
+  it("does not execute tools when arguments are not JSON objects", async () => {
+    let executions = 0;
+    const tool = Tool.create(async () => {
+      executions++;
+      return "ok";
+    })
+      .name("strict_args")
+      .build();
+    const toolkit = new ToolKit().add(tool);
+
+    const arrayArgs = await toolkit.execute({
+      type: "tool_call",
+      toolCallId: "call_array",
+      name: "strict_args",
+      arguments: "[]",
+    });
+
+    assert.equal(executions, 0);
+    assert.match(arrayArgs.text, /invalid_tool_arguments/);
+
+    await assert.rejects(
+      () => toolkit.execute({
+        type: "tool_call",
+        toolCallId: "call_invalid",
+        name: "strict_args",
+        arguments: "not json",
+      }, { errorPolicy: "throw" }),
+      ToolExecutionError
+    );
+  });
+
+  it("accepts an empty argument buffer for parameterless tools", async () => {
+    const tool = Tool.create(async (args) => ({ keys: Object.keys(args) }))
+      .name("no_args")
+      .build();
+    const toolkit = new ToolKit().add(tool);
+
+    const result = await toolkit.execute({
+      type: "tool_call",
+      toolCallId: "call_empty",
+      name: "no_args",
+      arguments: "",
+    });
+
+    assert.equal(result.text, "{\"keys\":[]}");
+  });
+
+  it("applies the error policy to tool creation validation", async () => {
+    const tool = Tool.create(async () => "ok")
+      .name("required_args")
+      .params(Param.string("value").required())
+      .build();
+    const toolkit = new ToolKit().add(tool);
+
+    const result = await toolkit.execute({
+      type: "tool_call",
+      toolCallId: "call_missing",
+      name: "required_args",
+      arguments: "{}",
+    });
+    assert.match(result.text, /缺少必填参数/);
+
+    await assert.rejects(
+      () => toolkit.execute({
+        type: "tool_call",
+        toolCallId: "call_missing_throw",
+        name: "required_args",
+        arguments: "{}",
+      }, { errorPolicy: "throw" }),
+      ToolExecutionError
+    );
   });
 
   it("throws ToolExecutionError when configured with throw policy", async () => {

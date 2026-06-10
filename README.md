@@ -28,6 +28,16 @@ const reply = await agent.run("用一句话介绍 AgentEngine。");
 console.log(reply.text);
 ```
 
+需要一次性取得完整响应时：
+
+```ts
+const reply = await agent.run("用一句话介绍 AgentEngine。", {
+  stream: false,
+});
+```
+
+流式与非流式模式使用同一套 `Message`、Session 和工具调用循环。
+
 ## 适合做什么
 
 - 构建带工具调用的 AI Agent
@@ -46,7 +56,8 @@ console.log(reply.text);
 - **流式事件**：把模型 stream 解析成 `TEXT_DELTA`、`TOOL_CALL_*`、`MESSAGE_DONE` 等事件。
 - **提示词构建器**：用 `Rule` 定位消息，再注入临时上下文；也支持数组操作管线。
 - **请求配置器**：链式构建 temperature、top_p、max_tokens、response_format 等参数。
-- **多平台适配**：内置 OpenAI、Anthropic、Gemini 适配器；OpenAI Adapter 可用于 DeepSeek、Qwen、Kimi、GLM 等兼容平台。
+- **低耦合 Provider**：Client、Adapter、Parser 三层可独立替换，内置 OpenAI Compatible、OpenAI Responses、Anthropic 和 Gemini 预设。
+- **流式与非流式**：同一套 Agent、Session 和工具循环同时支持增量 stream 与完整响应。
 - **中断与恢复**：支持 abort、timeout、partial message、continue 和 resume。
 - **工具审批**：支持自动审批、自定义审批、手动审批和审批超时策略。
 
@@ -61,6 +72,12 @@ npm install @notic/agent-engine
 ```bash
 # OpenAI / DeepSeek / Qwen / Kimi 等 OpenAI-compatible 平台
 npm install openai
+
+# Anthropic 原生 Messages API
+npm install @anthropic-ai/sdk
+
+# Gemini 原生 API
+npm install @google/genai
 
 # MCP 集成，可选
 npm install @modelcontextprotocol/sdk
@@ -124,6 +141,91 @@ console.log(reply.text);
 
 `Agent` 会自动把用户消息和助手回复写入 `Session`。
 
+## Provider
+
+Provider 只负责组合三块可替换能力：
+
+- `ModelClient`：发送平台请求，返回流或完整响应。
+- `MessageAdapter`：在统一 `Message` 与平台 JSON 之间转换。
+- `MessageStreamParser`：把平台流事件转换成统一事件和 `Message`。
+
+Agent 不需要知道当前使用哪一家模型平台。
+
+### OpenAI Compatible
+
+适用于 OpenAI Chat Completions，以及 DeepSeek、Qwen、Kimi、GLM 等兼容平台：
+
+```ts
+import OpenAI from "openai";
+import {
+  Agent,
+  OpenAICompatibleProvider,
+  Session,
+} from "@notic/agent-engine";
+
+const client = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com",
+});
+
+const agent = new Agent({
+  provider: new OpenAICompatibleProvider(client),
+  model: "deepseek-chat",
+  session: Session.create(),
+});
+```
+
+### OpenAI Responses API
+
+```ts
+import OpenAI from "openai";
+import { Agent, OpenAIResponsesProvider, Session } from "@notic/agent-engine";
+
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const agent = new Agent({
+  provider: new OpenAIResponsesProvider(client),
+  model: "your-openai-model",
+  session: Session.create(),
+});
+```
+
+Responses Provider 会保留 reasoning item、加密推理状态和 function call item，供下一轮工具调用继续使用。
+
+### Anthropic
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+import { Agent, AnthropicProvider, Session } from "@notic/agent-engine";
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const agent = new Agent({
+  provider: new AnthropicProvider(client),
+  model: "your-claude-model",
+  session: Session.create(),
+});
+```
+
+### Gemini
+
+```ts
+import { GoogleGenAI } from "@google/genai";
+import { Agent, GeminiProvider, Session } from "@notic/agent-engine";
+
+const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const agent = new Agent({
+  provider: new GeminiProvider(client),
+  model: "your-gemini-model",
+  session: Session.create(),
+});
+```
+
+所有内置 Provider 都支持：
+
+```ts
+await agent.run("增量输出");
+await agent.run("完整响应", { stream: false });
+```
+
 ## 工具调用示例
 
 ```ts
@@ -168,7 +270,9 @@ AgentEngine
 ├─ Stream    流式解析：chunk -> 结构化事件 -> Message
 ├─ Prompt    提示词构建：Rule、Injection、数组操作管线
 ├─ Config    请求参数：预设、链式配置、三层优先级
-├─ Adapter   平台适配：OpenAI、Anthropic、Gemini
+├─ Client    传输边界：流式请求、完整响应、中断信号
+├─ Adapter   消息转换：OpenAI、Responses、Anthropic、Gemini
+├─ Provider  Client + Adapter + Parser 的低耦合组合
 ├─ Media     媒体解析：data URI、HTTP、本地文件
 └─ Agent     编排层：自动循环、审批、中断、恢复
 ```
@@ -241,6 +345,18 @@ AgentEngine
 - 处理工具调用和工具结果
 - 控制 thinking 内容如何回传
 
+### Provider
+
+Provider 提供平台预设，但不接管 Agent 执行流程：
+
+- `OpenAICompatibleProvider`
+- `OpenAIResponsesProvider`
+- `AnthropicProvider`
+- `GeminiProvider`
+- `Provider.create()` 自定义组合
+
+通过 `provider.supportsComplete` 可以检查是否支持非流式完整响应。
+
 ### Agent
 
 智能体编排层，负责：
@@ -257,6 +373,7 @@ AgentEngine
 完整教程式 API 文档见：
 
 - [docs/API.md](./docs/API.md)
+- [CHANGELOG.md](./CHANGELOG.md)
 
 建议阅读顺序：
 

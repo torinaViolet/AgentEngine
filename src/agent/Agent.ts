@@ -9,6 +9,10 @@ import {
 } from "../tool/ToolKit";
 import { Session } from "../session/Session";
 import { StreamParser } from "../stream/StreamParser";
+import type {
+  MessageStreamParser,
+  MessageStreamParserFactory,
+} from "../stream/MessageStreamParser";
 import {
   StreamEvent,
   StreamEventType,
@@ -18,24 +22,24 @@ import { PromptBuilder } from "../prompt/PromptBuilder";
 import type { BuildOptions } from "../prompt/PromptBuilder";
 import { RequestConfig } from "../config/RequestConfig";
 import { generateId } from "../utils";
+import { ModelClient, toModelClient } from "../client";
+import type { Provider } from "../provider";
 
 /** OpenAI Client 最小接口（避免直接依赖 openai 包的类型） */
-export interface OpenAIClientLike {
-  chat: {
-    completions: {
-      create(params: any, options?: any): Promise<any>;
-    };
-  };
-}
+export type OpenAIClientLike = import("../client").OpenAIClientLike;
 
 /** Agent 配置 */
 export interface AgentOptions {
   /** OpenAI 兼容客户端 */
-  client: OpenAIClientLike;
+  client?: ModelClient | OpenAIClientLike;
+  /** Client + Adapter + Parser preset. */
+  provider?: Provider;
   /** 模型名*/
   model: string;
   /** 消息适配器（默认OpenAIAdapter） */
   adapter?: MessageAdapter;
+  /** Raw stream parser factory; overrides the Provider parser when supplied. */
+  parserFactory?: MessageStreamParserFactory;
   /** 工具包 */
   toolkit?: ToolKit;
   /** 工具调用审批函数：返回 false 或 { approved:false } 可拒绝执行 */
@@ -62,6 +66,8 @@ export interface AgentOptions {
 
 /** 单次运行控制选项 + 临时请求参数 */
 export interface AgentRunOptions extends Record<string, unknown> {
+  /** Use streaming transport by default; set false for one complete response. */
+  stream?: boolean;
   /** 中断信号：可取消请求、流读取和工具等待 */
   signal?: AbortSignal;
   /** 本次运行超时时间（毫秒） */
@@ -81,6 +87,7 @@ export type AgentStopReason =
   | "network_error"
   | "stream_error"
   | "tool_approval_rejected"
+  | "tool_approval_error"
   | "tool_execution_error"
   | "max_tokens"
   | "max_turns"
@@ -150,9 +157,12 @@ export interface AgentContinueOptions extends AgentRunOptions {
 
 /** Agent 主动中断错误 */
 export class AgentAbortError extends Error {
-  constructor(message: string = "Agent run aborted") {
+  readonly cause?: unknown;
+
+  constructor(message: string = "Agent run aborted", cause?: unknown) {
     super(message);
     this.name = "AbortError";
+    this.cause = cause;
   }
 }
 
@@ -164,8 +174,44 @@ export class AgentTimeoutError extends Error {
   }
 }
 
+/** 同一个 Agent 实例不允许同时运行多个任务 */
+export class AgentAlreadyRunningError extends Error {
+  constructor() {
+    super("Agent 已有运行中的任务，请等待完成或先中断当前任务");
+    this.name = "AgentAlreadyRunningError";
+  }
+}
+
+/** 工具审批函数执行失败 */
+export class AgentToolApprovalError extends Error {
+  readonly request: ToolApprovalRequest;
+  readonly cause?: unknown;
+
+  constructor(request: ToolApprovalRequest, cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(`工具审批失败 [${request.name}]: ${message}`);
+    this.name = "ToolApprovalError";
+    this.request = request;
+    this.cause = cause;
+  }
+}
+
+/** 等待手动工具审批超时 */
+export class AgentToolApprovalTimeoutError extends Error {
+  readonly request: ToolApprovalRequest;
+  readonly timeoutMs: number;
+
+  constructor(request: ToolApprovalRequest, timeoutMs: number) {
+    super(`工具审批超时 [${request.name}]: ${timeoutMs}ms`);
+    this.name = "ToolApprovalTimeoutError";
+    this.request = request;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 interface PreparedRunOptions {
   requestOptions: Record<string, unknown>;
+  stream: boolean;
   signal?: AbortSignal;
   promptBuildOptions?: BuildOptions;
   serializeOptions?: SerializeOptions;
@@ -179,7 +225,7 @@ export interface CustomEvent {
 }
 
 /** 事件处理函数签名 */
-type EventHandler = (event: StreamEvent | CustomEvent) => void;
+type EventHandler = (event: StreamEvent | CustomEvent) => unknown;
 
 /** 事件 handler 抛出异常时的回调。默认 console.error，可通过 setHandlerErrorHandler() 覆盖为 noop 或自定义 logger。 */
 export type HandlerErrorHandler = (
@@ -208,9 +254,10 @@ const defaultHandlerErrorHandler: HandlerErrorHandler = (error, event) => {
  *   const reply = await agent.run("北京天气怎么样？");
  */
 export class Agent {
-  private _client: OpenAIClientLike;
+  private _client: ModelClient;
   private _model: string;
   private _adapter: MessageAdapter;
+  private _parserFactory: MessageStreamParserFactory;
   private _toolkit?: ToolKit;
   private _session: Session;
   private _promptBuilder?: PromptBuilder;
@@ -229,9 +276,19 @@ export class Agent {
   private _handlerErrorHandler: HandlerErrorHandler = defaultHandlerErrorHandler;
 
   constructor(options: AgentOptions) {
-    this._client = options.client;
+    const client = options.client
+      ? toModelClient(options.client)
+      : options.provider?.client;
+    if (!client) {
+      throw new Error("Agent requires either client or provider");
+    }
+
+    this._client = client;
     this._model = options.model;
-    this._adapter = options.adapter || new OpenAIAdapter();
+    this._adapter = options.adapter ?? options.provider?.adapter ?? new OpenAIAdapter();
+    this._parserFactory = options.parserFactory
+      ?? options.provider?.parserFactory
+      ?? (() => new StreamParser());
     this._toolkit = options.toolkit;
     this._session = options.session;
     this._promptBuilder = options.promptBuilder;
@@ -265,11 +322,11 @@ export class Agent {
    */
   on<T extends StreamEventType>(
     event: T,
-    handler: (event: StreamEventMap[T]) => void
+    handler: (event: StreamEventMap[T]) => unknown
   ): this;
   on<T extends StreamEventType>(
     event: T[],
-    handler: (event: StreamEventMap[T]) => void
+    handler: (event: StreamEventMap[T]) => unknown
   ): this;
   on(event: string, handler: EventHandler): this;
   on(event: string[], handler: EventHandler): this;
@@ -292,7 +349,7 @@ export class Agent {
    */
   off<T extends StreamEventType>(
     event: T,
-    handler: (event: StreamEventMap[T]) => void
+    handler: (event: StreamEventMap[T]) => unknown
   ): this;
   off(event: string, handler: EventHandler): this;
   off(event: string, handler: EventHandler): this {
@@ -309,13 +366,13 @@ export class Agent {
    */
   once<T extends StreamEventType>(
     event: T,
-    handler: (event: StreamEventMap[T]) => void
+    handler: (event: StreamEventMap[T]) => unknown
   ): this;
   once(event: string, handler: EventHandler): this;
   once(event: string, handler: EventHandler): this {
     const wrapper: EventHandler = (e: any) => {
       this.off(event, wrapper);
-      handler(e);
+      return handler(e);
     };
     return this.on(event, wrapper);
   }
@@ -365,6 +422,7 @@ export class Agent {
     message: Message,
     options?: AgentRunOptions
   ): Promise<Message> {
+    this.ensureIdle();
     this._session.addMessage(message);
     return this.executeLoop(options);
   }
@@ -376,6 +434,7 @@ export class Agent {
     messages: Message[],
     options?: AgentRunOptions
   ): Promise<Message> {
+    this.ensureIdle();
     const run = this.prepareRunOptions(options);
 
     try {
@@ -383,38 +442,32 @@ export class Agent {
 
       const configParams = this._config ? this._config.build() : {};
       const mergedOptions = { ...configParams, ...this._requestOptions, ...run.requestOptions };
-      const parser = new StreamParser();
-
-      const { messages: serialized } = await this.raceWithAbort(
-        this._adapter.serialize(messages, run.serializeOptions),
-        run.signal
+      const requestParams = await this.buildModelRequest(
+        messages,
+        mergedOptions,
+        run
       );
 
-      const requestParams: Record<string, unknown> = {
-        model: this._model,
-        messages: serialized,
-        stream: true,
-        ...mergedOptions,
-      };
-
-      if (this._toolkit && this._toolkit.size > 0) {
-        requestParams.tools = this._toolkit.schemas;
+      if (!run.stream) {
+        const { assistantMsg } = await this.executeCompleteRequest(requestParams, run);
+        return assistantMsg;
       }
 
+      const parser = this._parserFactory();
       const stream = await this.raceWithAbort(
-        this._client.chat.completions.create(requestParams, this.createClientOptions(run.signal)),
+        this._client.stream(requestParams, this.createClientOptions(run.signal)),
         run.signal
       );
 
       for await (const chunk of stream as AsyncIterable<any>) {
         this.throwIfAborted(run.signal);
         const events = parser.feed(chunk);
-        this.emitAll(events);
+        this.emitParserEvents(events);
       }
 
       this.throwIfAborted(run.signal);
       const finalEvents = parser.finish();
-      this.emitAll(finalEvents);
+      this.emitParserEvents(finalEvents);
 
       const message = this.extractMessage(finalEvents);
       return message;
@@ -541,7 +594,7 @@ export class Agent {
 
   /** 当前是否有运行中的请求 */
   get isRunning(): boolean {
-    return !!this._activeAbortController && !this._activeAbortController.signal.aborted;
+    return !!this._activeAbortController;
   }
 
   /**
@@ -554,9 +607,11 @@ export class Agent {
       return false;
     }
 
-    const error = reason instanceof Error
+    const error = reason instanceof AgentAbortError
       ? reason
-      : new AgentAbortError(reason ?? "Agent run aborted by user");
+      : reason instanceof Error
+        ? new AgentAbortError(reason.message, reason)
+        : new AgentAbortError(reason ?? "Agent run aborted by user");
     this._activeAbortController.abort(error);
     return true;
   }
@@ -610,7 +665,7 @@ export class Agent {
   ): Promise<Message> {
     const run = this.prepareRunOptions(options);
     this.startRunState();
-    let currentParser: StreamParser | undefined;
+    let currentParser: MessageStreamParser | undefined;
     let partialAlreadyPersisted = false;
 
     try {
@@ -619,7 +674,7 @@ export class Agent {
 
       for (let turn = 0; turn < this._maxTurns; turn++) {
         this.throwIfAborted(run.signal);
-        const parser = new StreamParser();
+        const parser = run.stream ? this._parserFactory() : undefined;
         currentParser = parser;
         partialAlreadyPersisted = false;
         this.updateRunState({ turn });
@@ -627,9 +682,9 @@ export class Agent {
         this.emit({ type: StreamEventType.TURN_START, turn });
 
         // 流式调用 + 解析
-        const { assistantMsg, finishReason } = await this.executeSingleStream(
-          parser, mergedOptions, run
-        );
+        const { assistantMsg, finishReason } = parser
+          ? await this.executeSingleStream(parser, mergedOptions, run)
+          : await this.executeSingleComplete(mergedOptions, run);
 
         // 添加到 Session
         this._session.addAssistant(assistantMsg);
@@ -671,13 +726,18 @@ export class Agent {
       const partial = currentParser && !partialAlreadyPersisted
         ? this.persistPartialSnapshot(currentParser, reason)
         : undefined;
+      const canResume = !!partial || this.isContinuableError(error);
+
+      if (canResume) {
+        this.completeInterruptedToolCalls(error, reason);
+      }
 
       if (this._lastRunState?.error !== error) {
         this.failRunState(
           error,
           reason,
           partial,
-          !!partial || this.isContinuableError(error)
+          canResume
         );
       }
       this.emitError(error);
@@ -695,11 +755,42 @@ export class Agent {
     return { ...configParams, ...this._requestOptions, ...runOptions };
   }
 
+  private async buildModelRequest(
+    messages: Message[],
+    options: Record<string, unknown>,
+    run: PreparedRunOptions
+  ): Promise<Record<string, unknown>> {
+    const serialized = await this.raceWithAbort(
+      this._adapter.serialize(messages, run.serializeOptions),
+      run.signal
+    );
+    const tools = this._toolkit?.size ? this._toolkit.schemas : undefined;
+
+    if (this._adapter.buildRequest) {
+      return this._adapter.buildRequest({
+        model: this._model,
+        serialized,
+        tools,
+        options,
+        stream: run.stream,
+      });
+    }
+
+    const request: Record<string, unknown> = {
+      model: this._model,
+      messages: serialized.messages,
+      ...options,
+      stream: run.stream,
+    };
+    if (tools) request.tools = tools;
+    return request;
+  }
+
   /**
    * 执行单轮流式调用：序列化 → 请求 → 解析 → 返回 Message
    */
   private async executeSingleStream(
-    parser: StreamParser,
+    parser: MessageStreamParser,
     mergedOptions: Record<string, unknown>,
     run: PreparedRunOptions
   ): Promise<{ assistantMsg: Message; finishReason: string | undefined }> {
@@ -708,26 +799,15 @@ export class Agent {
     const context = this._promptBuilder
       ? this._promptBuilder.build(history, run.promptBuildOptions)
       : history;
-    const { messages: serialized } = await this.raceWithAbort(
-      this._adapter.serialize(context, run.serializeOptions),
-      run.signal
+    const adaptedRequest = await this.buildModelRequest(
+      context,
+      mergedOptions,
+      run
     );
-
-    // 构建请求参数
-    const requestParams: Record<string, unknown> = {
-      model: this._model,
-      messages: serialized,
-      stream: true,
-      ...mergedOptions,
-    };
-
-    if (this._toolkit && this._toolkit.size > 0) {
-      requestParams.tools = this._toolkit.schemas;
-    }
 
     // 流式调用
     const stream = await this.raceWithAbort(
-      this._client.chat.completions.create(requestParams, this.createClientOptions(run.signal)),
+      this._client.stream(adaptedRequest, this.createClientOptions(run.signal)),
       run.signal
     );
 
@@ -735,14 +815,14 @@ export class Agent {
     for await (const chunk of stream as AsyncIterable<any>) {
       this.throwIfAborted(run.signal);
       const events = parser.feed(chunk);
-      this.emitAll(events);
+      this.emitParserEvents(events);
     }
 
     this.throwIfAborted(run.signal);
 
     // 结束解析
     const finalEvents = parser.finish();
-    this.emitAll(finalEvents);
+    this.emitParserEvents(finalEvents);
 
     // 提取组装好的 Message
     const assistantMsg = this.extractMessage(finalEvents);
@@ -752,6 +832,80 @@ export class Agent {
     assistantMsg.model = this._model;
 
     return { assistantMsg, finishReason };
+  }
+
+  /** Execute one complete-response turn without a stream parser. */
+  private async executeSingleComplete(
+    mergedOptions: Record<string, unknown>,
+    run: PreparedRunOptions
+  ): Promise<{ assistantMsg: Message; finishReason: string | undefined }> {
+    const history = this._session.history();
+    const context = this._promptBuilder
+      ? this._promptBuilder.build(history, run.promptBuildOptions)
+      : history;
+    const request = await this.buildModelRequest(context, mergedOptions, run);
+    return this.executeCompleteRequest(request, run);
+  }
+
+  private async executeCompleteRequest(
+    request: Record<string, unknown>,
+    run: PreparedRunOptions
+  ): Promise<{ assistantMsg: Message; finishReason: string | undefined }> {
+    if (!this._client.complete) {
+      throw new Error(
+        "The configured ModelClient does not support non-streaming requests; implement complete() or use stream: true"
+      );
+    }
+
+    const raw = await this.raceWithAbort(
+      this._client.complete(request, this.createClientOptions(run.signal)),
+      run.signal
+    );
+    this.throwIfAborted(run.signal);
+
+    const assistantMsg = this._adapter.deserializeResponse
+      ? this._adapter.deserializeResponse(raw)
+      : this._adapter.deserialize(raw);
+    const finishReason = this._adapter.getFinishReason?.(raw);
+    assistantMsg.model ??= this._model;
+    this.emitCompleteResponseEvents(assistantMsg, finishReason);
+
+    return { assistantMsg, finishReason };
+  }
+
+  private emitCompleteResponseEvents(
+    message: Message,
+    finishReason?: string
+  ): void {
+    if (message.thinking) {
+      this.emit({
+        type: StreamEventType.THINKING_DONE,
+        thinking: message.thinking,
+      });
+    }
+    if (message.text) {
+      this.emit({ type: StreamEventType.TEXT_DONE, text: message.text });
+    }
+    message.toolCalls.forEach((toolCall, index) => {
+      this.emit({
+        type: StreamEventType.TOOL_CALL_START,
+        index,
+        toolCallId: toolCall.toolCallId,
+        name: toolCall.name,
+      });
+      this.emit({
+        type: StreamEventType.TOOL_CALL_DONE,
+        index,
+        toolCallId: toolCall.toolCallId,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      });
+    });
+    this.emit({
+      type: StreamEventType.MESSAGE_DONE,
+      message,
+      finishReason,
+    });
   }
 
   /**
@@ -843,15 +997,14 @@ export class Agent {
     const handlers = this._handlers.get(event.type) || [];
     for (const handler of handlers) {
       try {
-        handler(event);
-      } catch (e) {
-        // handler 异常不应中断流程，交给可配置的错误处理器
-        const error = e instanceof Error ? e : new Error(String(e));
-        try {
-          this._handlerErrorHandler(error, event);
-        } catch {
-          // 错误处理器本身也抛错时静默吞掉，避免递归
+        const result = handler(event);
+        if (result && typeof (result as PromiseLike<void>).then === "function") {
+          Promise.resolve(result).catch((error) => {
+            this.reportHandlerError(error, event);
+          });
         }
+      } catch (e) {
+        this.reportHandlerError(e, event);
       }
     }
   }
@@ -867,9 +1020,31 @@ export class Agent {
     return this;
   }
 
-  private emitAll(events: StreamEvent[]): void {
+  private emitParserEvents(events: StreamEvent[]): void {
+    let parserError: Error | undefined;
+
     for (const event of events) {
-      this.emit(event);
+      if (event.type === StreamEventType.ERROR) {
+        parserError ??= event.error;
+      } else {
+        this.emit(event);
+      }
+    }
+
+    if (parserError) {
+      throw parserError;
+    }
+  }
+
+  private reportHandlerError(
+    errorLike: unknown,
+    event: StreamEvent | CustomEvent
+  ): void {
+    const error = errorLike instanceof Error ? errorLike : new Error(String(errorLike));
+    try {
+      this._handlerErrorHandler(error, event);
+    } catch {
+      // 错误处理器本身也抛错时静默吞掉，避免递归
     }
   }
 
@@ -951,6 +1126,23 @@ export class Agent {
       const result = resultByCallId.get(tc.toolCallId);
       if (!result) continue;
       this.throwIfAborted(signal);
+
+      const toolError = result.metadata.toolExecutionError as
+        | { message?: string }
+        | undefined;
+      if (toolError) {
+        this.emitToolExecutionError(
+          new ToolExecutionError(
+            tc.toolCallId,
+            tc.name,
+            new Error(toolError.message || "工具执行失败")
+          ),
+          tc,
+          result
+        );
+        continue;
+      }
+
       this.emit({
         type: StreamEventType.TOOL_EXECUTE_DONE,
         toolCallId: tc.toolCallId,
@@ -1025,9 +1217,22 @@ export class Agent {
         ...request,
       });
 
-      const normalized = this.normalizeApprovalResult(
-        await this.resolveToolApproval(request, signal)
-      );
+      let approvalResult: ToolApprovalResult;
+      try {
+        approvalResult = await this.resolveToolApproval(request, signal);
+      } catch (e) {
+        const error = this.toError(e);
+        if (
+          error instanceof AgentAbortError ||
+          error instanceof AgentTimeoutError ||
+          error instanceof AgentToolApprovalTimeoutError
+        ) {
+          throw error;
+        }
+        throw new AgentToolApprovalError(request, error);
+      }
+
+      const normalized = this.normalizeApprovalResult(approvalResult);
 
       if (normalized.approved) {
         this.emit({
@@ -1117,7 +1322,10 @@ export class Agent {
       if (this._toolApprovalTimeoutMs !== undefined) {
         timer = setTimeout(() => {
           if (this._toolApprovalTimeoutPolicy === "abort") {
-            settleReject(new Error(`工具审批超时: ${request.name}`));
+            settleReject(new AgentToolApprovalTimeoutError(
+              request,
+              Math.max(0, this._toolApprovalTimeoutMs!)
+            ));
           } else {
             settleResolve({ approved: false, reason: "工具审批超时" });
           }
@@ -1154,7 +1362,15 @@ export class Agent {
   }
 
   private prepareRunOptions(options?: AgentRunOptions): PreparedRunOptions {
-    const { signal: externalSignal, timeoutMs, promptBuildOptions, serializeOptions, ...requestOptions } = options ?? {};
+    this.ensureIdle();
+    const {
+      signal: externalSignal,
+      timeoutMs,
+      promptBuildOptions,
+      serializeOptions,
+      stream = true,
+      ...requestOptions
+    } = options ?? {};
     const cleanupFns: Array<() => void> = [];
     const controller = new AbortController();
     const signal = controller.signal;
@@ -1178,6 +1394,7 @@ export class Agent {
 
     return {
       requestOptions,
+      stream,
       signal,
       promptBuildOptions,
       serializeOptions,
@@ -1192,6 +1409,12 @@ export class Agent {
 
   private createClientOptions(signal?: AbortSignal): Record<string, unknown> | undefined {
     return signal ? { signal } : undefined;
+  }
+
+  private ensureIdle(): void {
+    if (this.isRunning) {
+      throw new AgentAlreadyRunningError();
+    }
   }
 
   private throwIfAborted(signal?: AbortSignal): void {
@@ -1280,7 +1503,15 @@ export class Agent {
 
   private classifyStopReason(error: Error): AgentStopReason {
     if (error instanceof AgentTimeoutError || error.name === "TimeoutError") return "timeout";
+    if (
+      error instanceof AgentToolApprovalTimeoutError ||
+      error.name === "ToolApprovalTimeoutError"
+    ) return "timeout";
     if (error instanceof AgentAbortError || error.name === "AbortError") return "abort";
+    if (
+      error instanceof AgentToolApprovalError ||
+      error.name === "ToolApprovalError"
+    ) return "tool_approval_error";
     if (error instanceof ToolExecutionError || error.name === "ToolExecutionError") return "tool_execution_error";
 
     const name = (error.name || "").toLowerCase();
@@ -1312,7 +1543,7 @@ export class Agent {
     return "unknown_error";
   }
 
-  private persistPartialSnapshot(parser: StreamParser, reason: AgentStopReason): Message | undefined {
+  private persistPartialSnapshot(parser: MessageStreamParser, reason: AgentStopReason): Message | undefined {
     if (!parser.hasSnapshotContent) return undefined;
 
     const partial = parser.snapshot;
@@ -1331,6 +1562,8 @@ export class Agent {
     if (
       error instanceof AgentTimeoutError ||
       error instanceof AgentAbortError ||
+      error instanceof AgentToolApprovalTimeoutError ||
+      error instanceof AgentToolApprovalError ||
       error instanceof ToolExecutionError ||
       error.name === "TimeoutError" ||
       error.name === "AbortError" ||
@@ -1340,5 +1573,49 @@ export class Agent {
     }
     const reason = this.classifyStopReason(error);
     return reason === "network_error" || reason === "stream_error";
+  }
+
+  private completeInterruptedToolCalls(
+    error: Error,
+    reason: AgentStopReason
+  ): void {
+    const history = this._session.history();
+    let assistantIndex = -1;
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === "assistant" && history[i].toolCalls.length > 0) {
+        assistantIndex = i;
+        break;
+      }
+    }
+
+    if (assistantIndex === -1) return;
+
+    const assistant = history[assistantIndex];
+    const completedIds = new Set<string>();
+    for (let i = assistantIndex + 1; i < history.length; i++) {
+      for (const part of history[i].parts) {
+        if (part.type === "tool_result") {
+          completedIds.add(part.toolCallId);
+        }
+      }
+    }
+
+    const missingResults = assistant.toolCalls
+      .filter((toolCall) => toolCall.toolCallId && !completedIds.has(toolCall.toolCallId))
+      .map((toolCall) => Message.tool(
+        toolCall.toolCallId,
+        JSON.stringify({
+          error: error.message,
+          interrupted: true,
+          outcome: "unknown",
+          stopReason: reason,
+        }),
+        toolCall.name
+      ).tag("interrupted", "recoverable").setMeta("interrupted", true));
+
+    if (missingResults.length > 0) {
+      this._session.addTool(missingResults);
+    }
   }
 }

@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Agent, OpenAIClientLike } from "../../src/agent";
+import {
+  Agent,
+  AgentAbortError,
+  AgentAlreadyRunningError,
+  AgentToolApprovalError,
+  AgentToolApprovalTimeoutError,
+  OpenAIClientLike,
+} from "../../src/agent";
 import { RequestConfig } from "../../src/config";
 import { Message, Role } from "../../src/message";
 import { PromptBuilder, Rule } from "../../src/prompt";
@@ -259,6 +266,115 @@ describe("Agent fake client", () => {
     assert.equal(agent.lastRunState?.status, "completed");
   });
 
+  it("cleans pending approval and repairs tool protocol when aborted", async () => {
+    const client = new FakeOpenAIClient().enqueue(toolCallChunks("echo", { value: "later" }));
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+      toolkit: new ToolKit().add(createEchoTool()),
+      toolApprovalMode: "manual",
+    });
+
+    const run = agent.run("wait for approval");
+    await waitFor(() => agent.pendingApprovals.length === 1);
+
+    const reason = new Error("user cancelled approval");
+    assert.equal(agent.abort(reason), true);
+    await assert.rejects(run, (error) => {
+      assert.ok(error instanceof AgentAbortError);
+      assert.equal(error.cause, reason);
+      return true;
+    });
+
+    assert.deepEqual(agent.pendingApprovals, []);
+    assert.equal(agent.lastRunState?.status, "interrupted");
+    assert.equal(agent.lastRunState?.stopReason, "abort");
+    assert.equal(agent.canResume, true);
+    const repaired = agent.session.history().at(-1)!;
+    assert.equal(repaired.role, Role.Tool);
+    assert.equal(repaired.metadata.interrupted, true);
+    assert.match(repaired.text, /"outcome":"unknown"/);
+  });
+
+  it("classifies manual approval abort timeouts and can resume safely", async () => {
+    const client = new FakeOpenAIClient()
+      .enqueue(toolCallChunks("echo", { value: "timeout" }))
+      .enqueue(textChunks("resumed safely"));
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+      toolkit: new ToolKit().add(createEchoTool()),
+      toolApprovalMode: "manual",
+      toolApprovalTimeoutMs: 5,
+      toolApprovalTimeoutPolicy: "abort",
+    });
+
+    await assert.rejects(
+      agent.run("time out approval"),
+      AgentToolApprovalTimeoutError
+    );
+
+    assert.deepEqual(agent.pendingApprovals, []);
+    assert.equal(agent.lastRunState?.status, "interrupted");
+    assert.equal(agent.lastRunState?.stopReason, "timeout");
+    assert.equal(agent.canResume, true);
+
+    const reply = await agent.resume();
+    assert.equal(reply.text, "resumed safely");
+    assert.deepEqual(
+      (client.calls[1].params.messages as Array<{ role: string }>).map((msg) => msg.role),
+      ["user", "assistant", "tool", "user"]
+    );
+  });
+
+  it("cleans pending approval when manual approval times out as rejected", async () => {
+    const client = new FakeOpenAIClient().enqueue(toolCallChunks("echo", { value: "timeout" }));
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+      toolkit: new ToolKit().add(createEchoTool()),
+      toolApprovalMode: "manual",
+      toolApprovalTimeoutMs: 5,
+    });
+
+    await assert.rejects(agent.run("reject timed out approval"), /工具调用均被审批拒绝/);
+
+    assert.deepEqual(agent.pendingApprovals, []);
+    assert.equal(agent.lastRunState?.status, "failed");
+    assert.equal(agent.lastRunState?.stopReason, "tool_approval_rejected");
+    assert.equal(agent.canResume, true);
+    const result = agent.session.history().at(-1)!;
+    assert.equal(result.role, Role.Tool);
+    assert.match(result.text, /工具审批超时/);
+  });
+
+  it("wraps approval handler failures and repairs missing tool results", async () => {
+    const client = new FakeOpenAIClient().enqueue(toolCallChunks("echo", { value: "x" }));
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+      toolkit: new ToolKit().add(createEchoTool()),
+      toolApproval: () => {
+        throw new Error("approval service unavailable");
+      },
+    });
+
+    await assert.rejects(agent.run("approve this"), (error) => {
+      assert.ok(error instanceof AgentToolApprovalError);
+      assert.equal(error.request.name, "echo");
+      assert.match(error.message, /approval service unavailable/);
+      return true;
+    });
+
+    assert.equal(agent.lastRunState?.stopReason, "tool_approval_error");
+    assert.equal(agent.canResume, true);
+    assert.equal(agent.session.history().at(-1)?.role, Role.Tool);
+  });
+
   it("rejects tool calls through an approval handler and records a rejected tool result", async () => {
     const client = new FakeOpenAIClient().enqueue(toolCallChunks("echo", { value: "nope" }));
     const toolkit = new ToolKit().add(createEchoTool());
@@ -308,6 +424,36 @@ describe("Agent fake client", () => {
     assert.match(agent.session.history().at(-1)?.text ?? "", /"paused":true/);
   });
 
+  it("emits tool execution errors while returning them to the model", async () => {
+    const failingTool = Tool.create(() => {
+      throw new Error("recoverable failure");
+    })
+      .name("fail_softly")
+      .build();
+    const client = new FakeOpenAIClient()
+      .enqueue(toolCallChunks("fail_softly", {}))
+      .enqueue(textChunks("handled tool failure"));
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+      toolkit: new ToolKit().add(failingTool),
+    });
+    const errors: Array<{ error: Error; result?: Message }> = [];
+    const done: string[] = [];
+
+    agent.on(StreamEventType.TOOL_EXECUTE_ERROR, (event) => errors.push(event));
+    agent.on(StreamEventType.TOOL_EXECUTE_DONE, (event) => done.push(event.name));
+
+    const reply = await agent.run("use failing tool");
+
+    assert.equal(reply.text, "handled tool failure");
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].result?.metadata.toolExecutionError !== undefined, true);
+    assert.match(errors[0].error.message, /recoverable failure/);
+    assert.deepEqual(done, []);
+  });
+
   it("returns a max-token partial result without throwing when finish_reason is length", async () => {
     const client = new FakeOpenAIClient().enqueue(textChunks("partial", "length"));
     const agent = new Agent({
@@ -340,5 +486,81 @@ describe("Agent fake client", () => {
       ["raw system", "raw user"]
     );
     assert.equal(client.calls[0].params.temperature, 0.1);
+  });
+
+  it("rejects concurrent runs without mutating the session", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = new FakeOpenAIClient().enqueue(() => (async function* () {
+      await gate;
+      yield textChunks("first reply")[0];
+    })());
+    const session = Session.create();
+    const agent = new Agent({ client, model: "fake-model", session });
+
+    const firstRun = agent.run("first");
+    await waitFor(() => agent.isRunning);
+
+    await assert.rejects(
+      () => agent.run("second"),
+      AgentAlreadyRunningError
+    );
+    assert.deepEqual(session.history().map((msg) => msg.text), ["first"]);
+
+    release!();
+    assert.equal((await firstRun).text, "first reply");
+    assert.equal(agent.isRunning, false);
+  });
+
+  it("fails the run when stream parsing emits an error", async () => {
+    const malformedChunk: StreamChunk = {
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            get function() {
+              throw new Error("bad streamed tool call");
+            },
+          }],
+        },
+      }],
+    };
+    const client = new FakeOpenAIClient().enqueue([malformedChunk]);
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+    });
+    const errors: Error[] = [];
+    agent.on(StreamEventType.ERROR, (event) => errors.push(event.error));
+
+    await assert.rejects(agent.run("parse this"), /bad streamed tool call/);
+
+    assert.equal(errors.length, 1);
+    assert.equal(agent.lastRunState?.status, "failed");
+    assert.equal(agent.lastRunState?.stopReason, "unknown_error");
+    assert.deepEqual(agent.session.history().map((msg) => msg.text), ["parse this"]);
+  });
+
+  it("reports rejected promises from async event handlers", async () => {
+    const client = new FakeOpenAIClient().enqueue(textChunks("hello"));
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+    });
+    const handlerErrors: Error[] = [];
+
+    agent.setHandlerErrorHandler((error) => handlerErrors.push(error));
+    agent.on(StreamEventType.TEXT_DELTA, async () => {
+      await Promise.resolve();
+      throw new Error("async handler failed");
+    });
+
+    assert.equal((await agent.run("hello")).text, "hello");
+    await waitFor(() => handlerErrors.length === 1);
+    assert.match(handlerErrors[0].message, /async handler failed/);
   });
 });

@@ -22,8 +22,10 @@ export {
   ThinkingSerializationMode,
   ThinkingSerializationScope,
   ThinkingSerializationOptions,
+  BuildModelRequestInput,
 } from "./adapter";
 export { OpenAIAdapter } from "./adapter";
+export { OpenAIResponsesAdapter } from "./adapter";
 export { AnthropicAdapter } from "./adapter";
 export { GeminiAdapter } from "./adapter";
 
@@ -48,6 +50,7 @@ export {
   ToolExecutionOptions,
   ToolErrorPolicy,
   ToolExecutionError,
+  ToolArgumentsError,
 } from "./tool";
 export { McpToolAdapter } from "./tool";
 
@@ -76,6 +79,43 @@ export {
   ErrorEvent,
 } from "./stream";
 export { StreamParser } from "./stream";
+export {
+  OpenAIResponsesStreamParser,
+  AnthropicStreamParser,
+  GeminiStreamParser,
+} from "./stream";
+export {
+  MessageStreamParser,
+  MessageStreamParserFactory,
+} from "./stream";
+
+// ===== Client =====
+export {
+  ModelClient,
+  ModelClientOptions,
+  OpenAIChatClient,
+  OpenAIResponsesClientLike,
+  OpenAIResponsesClient,
+  AnthropicClientLike,
+  AnthropicMessagesClient,
+  GeminiClientLike,
+  GeminiModelClient,
+  isModelClient,
+  toModelClient,
+} from "./client";
+
+// ===== Provider =====
+export {
+  Provider,
+  ProviderOptions,
+  OpenAICompatibleProvider,
+  OpenAICompatibleProviderOptions,
+  OpenAIResponsesProvider,
+  OpenAIResponsesProviderOptions,
+  NativeProviderOptions,
+  AnthropicProvider,
+  GeminiProvider,
+} from "./provider";
 
 // ===== Config =====
 export { RequestConfig } from "./config";
@@ -107,8 +147,12 @@ export {
   AgentToolErrorPolicy,
   AgentAbortError,
   AgentTimeoutError,
+  AgentAlreadyRunningError,
+  AgentToolApprovalError,
+  AgentToolApprovalTimeoutError,
   OpenAIClientLike,
   CustomEvent,
+  HandlerErrorHandler,
 } from "./agent";
 
 // ===== Utils =====

@@ -1,6 +1,6 @@
 {
   "name": "@notic/agent-engine",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "A lightweight, elegant, and feature-complete TypeScript AI Agent framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -8,6 +8,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter/index.d.ts",
+      "default": "./dist/adapter/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./provider": {
+      "types": "./dist/provider/index.d.ts",
+      "default": "./dist/provider/index.js"
+    },
+    "./stream": {
+      "types": "./dist/stream/index.d.ts",
+      "default": "./dist/stream/index.js"
     }
   },
   "sideEffects": false,
@@ -15,6 +31,7 @@
     "dist",
     "docs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -22,7 +39,7 @@
     "clean": "rimraf dist",
     "test": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/**/*.test.js",
     "test:real:deepseek": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/test/agent/agent.real.test.js",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm test && npm run clean && npm run build"
   },
   "keywords": [
     "ai",

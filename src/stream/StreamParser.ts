@@ -7,6 +7,7 @@ import {
   StreamEvent,
   StreamEventType,
 } from "./StreamEvent";
+import { MessageStreamParser } from "./MessageStreamParser";
 
 /** 内部工具调用累积器 */
 interface ToolCallAccumulator {
@@ -32,7 +33,7 @@ interface ToolCallAccumulator {
  *   }
  *const finalEvents = parser.finish();
  */
-export class StreamParser {
+export class StreamParser implements MessageStreamParser {
   private _thinkingBuffer: string = "";
   private _textBuffer: string = "";
   private _toolCalls: Map<number, ToolCallAccumulator> = new Map();

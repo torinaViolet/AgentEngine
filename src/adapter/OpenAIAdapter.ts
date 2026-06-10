@@ -8,6 +8,7 @@ import {
   MessageAdapter,
   SerializedResult,
   SerializeOptions,
+  BuildModelRequestInput,
   normalizeThinkingOptions,
   shouldSerializeThinking,
 } from "./MessageAdapter";
@@ -78,6 +79,21 @@ export class OpenAIAdapter implements MessageAdapter {
       systemMessage:
         systemMessages.length > 0 ? systemMessages.join("\n") : undefined,
     };
+  }
+
+  buildRequest(input: BuildModelRequestInput): Record<string, unknown> {
+    const request: Record<string, unknown> = {
+      model: input.model,
+      messages: input.serialized.messages,
+      ...input.options,
+      stream: input.stream ?? true,
+    };
+
+    if (input.tools && input.tools.length > 0) {
+      request.tools = input.tools;
+    }
+
+    return request;
   }
 
   // ---- Assistant 消息 ----
@@ -375,6 +391,12 @@ export class OpenAIAdapter implements MessageAdapter {
     }
 
     return message;
+  }
+
+  getFinishReason(raw: unknown): string | undefined {
+    const data = raw as Record<string, unknown>;
+    const choices = data.choices as Array<Record<string, unknown>> | undefined;
+    return choices?.[0]?.finish_reason as string | undefined;
   }
 
   // ========================

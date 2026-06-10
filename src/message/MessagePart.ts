@@ -33,6 +33,8 @@ export interface ToolCallPart {
   name: string;
   /** JSON string of arguments */
   arguments: string;
+  /** Provider-specific data that must survive a tool round trip. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface ToolResultPart {

@@ -22,3 +22,10 @@ export {
   ErrorEvent,
 } from "./StreamEvent";
 export { StreamParser } from "./StreamParser";
+export { OpenAIResponsesStreamParser } from "./OpenAIResponsesStreamParser";
+export { AnthropicStreamParser } from "./AnthropicStreamParser";
+export { GeminiStreamParser } from "./GeminiStreamParser";
+export {
+  MessageStreamParser,
+  MessageStreamParserFactory,
+} from "./MessageStreamParser";

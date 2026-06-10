@@ -13,6 +13,10 @@ export {
     AgentToolErrorPolicy,
     AgentAbortError,
     AgentTimeoutError,
+    AgentAlreadyRunningError,
+    AgentToolApprovalError,
+    AgentToolApprovalTimeoutError,
     OpenAIClientLike,
     CustomEvent,
+    HandlerErrorHandler,
 } from "./Agent";

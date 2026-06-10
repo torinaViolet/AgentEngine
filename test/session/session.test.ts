@@ -131,6 +131,20 @@ describe("Session", () => {
     });
   });
 
+  it("keeps usage totals correct after public message mutations", () => {
+    const session = Session.create();
+
+    assert.equal(session.totalUsage.totalTokens, 0);
+
+    const assistant = Message.assistant("first");
+    assistant.usage = new Usage(1, 2, 3);
+    session.addMessage(assistant);
+    assert.equal(session.totalUsage.totalTokens, 3);
+
+    assistant.usage = new Usage(5, 8, 13);
+    assert.equal(session.totalUsage.totalTokens, 13);
+  });
+
   it("serializes and restores id, title, tree, and cursor path", () => {
     const { session, branchAssistant } = createBranchedSession();
     session.title = "Fixture session";

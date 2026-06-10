@@ -181,6 +181,30 @@ export class Message {
    * 追加子节点，设置 parent 关系，返回 child
    */
   append(child: Message): Message {
+    if (child === this) {
+      throw new Error("消息不能追加到自身");
+    }
+
+    let ancestor: Message | undefined = this;
+    while (ancestor) {
+      if (ancestor === child) {
+        throw new Error("不能将祖先消息追加为子节点");
+      }
+      ancestor = ancestor.parent;
+    }
+
+    if (child.parent === this && this.children.includes(child)) {
+      return child;
+    }
+
+    if (child.parent) {
+      const previousParent = child.parent;
+      const previousIndex = previousParent.children.indexOf(child);
+      if (previousIndex !== -1) {
+        previousParent.children.splice(previousIndex, 1);
+      }
+    }
+
     child.parent = this;
     this.children.push(child);
     return child;

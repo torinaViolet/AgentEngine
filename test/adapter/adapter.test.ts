@@ -4,6 +4,7 @@ import {
   AnthropicAdapter,
   GeminiAdapter,
   OpenAIAdapter,
+  OpenAIResponsesAdapter,
 } from "../../src/adapter";
 import {
   normalizeThinkingOptions,
@@ -11,6 +12,7 @@ import {
 } from "../../src/adapter/MessageAdapter";
 import { Message, Role } from "../../src/message";
 import type { MediaResolver, ResolvedMedia } from "../../src/media";
+import type { ToolSchema } from "../../src/tool";
 
 class FakeResolver implements MediaResolver {
   public readonly calls: string[] = [];
@@ -115,6 +117,95 @@ describe("thinking serialization helpers", () => {
     assert.equal(shouldSerializeThinking(messages[4], 4, messages, lastOptions), true);
     assert.equal(shouldSerializeThinking(messages[3], 3, messages, toolOptions), true);
     assert.equal(shouldSerializeThinking(messages[1], 1, messages, includeOptions), true);
+  });
+});
+
+describe("Adapter request building", () => {
+  const tool: ToolSchema = {
+    type: "function",
+    function: {
+      name: "lookup",
+      description: "Look up a value",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  };
+
+  it("builds OpenAI Chat Completions requests", () => {
+    const request = new OpenAIAdapter().buildRequest({
+      model: "openai-model",
+      serialized: { messages: [{ role: "user", content: "hello" }] },
+      tools: [tool],
+      options: { temperature: 0.2 },
+    });
+
+    assert.deepEqual(request, {
+      model: "openai-model",
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+      temperature: 0.2,
+      tools: [tool],
+    });
+  });
+
+  it("builds Anthropic requests with system and input_schema", () => {
+    const request = new AnthropicAdapter().buildRequest({
+      model: "claude-model",
+      serialized: {
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+        systemMessage: "system prompt",
+      },
+      tools: [tool],
+      options: { max_tokens: 512, stop: ["END"] },
+    });
+
+    assert.equal(request.system, "system prompt");
+    assert.deepEqual(request.stop_sequences, ["END"]);
+    assert.equal("stop" in request, false);
+    assert.deepEqual(request.tools, [{
+      name: "lookup",
+      description: "Look up a value",
+      input_schema: tool.function.parameters,
+    }]);
+  });
+
+  it("builds Gemini requests with contents and config", () => {
+    const request = new GeminiAdapter().buildRequest({
+      model: "gemini-model",
+      serialized: {
+        messages: [{ role: "user", parts: [{ text: "hello" }] }],
+        systemMessage: "system prompt",
+      },
+      tools: [tool],
+      options: {
+        temperature: 0.4,
+        max_tokens: 256,
+        top_p: 0.9,
+        response_format: { type: "json_object" },
+      },
+    });
+
+    assert.deepEqual(request, {
+      model: "gemini-model",
+      contents: [{ role: "user", parts: [{ text: "hello" }] }],
+      config: {
+        temperature: 0.4,
+        maxOutputTokens: 256,
+        topP: 0.9,
+        responseMimeType: "application/json",
+        systemInstruction: "system prompt",
+        tools: [{
+          functionDeclarations: [{
+            name: "lookup",
+            description: "Look up a value",
+            parameters: tool.function.parameters,
+          }],
+        }],
+      },
+    });
   });
 });
 
@@ -265,6 +356,137 @@ describe("OpenAIAdapter", () => {
   });
 });
 
+describe("OpenAIResponsesAdapter", () => {
+  it("serializes messages, reasoning items, function calls, and outputs", async () => {
+    const adapter = new OpenAIResponsesAdapter();
+    const reasoningItem = {
+      type: "reasoning",
+      id: "rs_1",
+      encrypted_content: "encrypted",
+      summary: [],
+    };
+    const functionCall = {
+      type: "function_call",
+      id: "fc_1",
+      call_id: "call_1",
+      name: "lookup",
+      arguments: "{\"query\":\"x\"}",
+      status: "completed",
+    };
+    const assistant = Message.assistant([
+      { type: "thinking", text: "consider" },
+      {
+        type: "tool_call",
+        toolCallId: "call_1",
+        name: "lookup",
+        arguments: "{\"query\":\"x\"}",
+        metadata: { itemId: "fc_1", rawItem: functionCall },
+      },
+    ]).setMeta("openaiReasoningItems", [reasoningItem]);
+
+    const serialized = await adapter.serialize([
+      Message.system("system"),
+      Message.user("hello"),
+      assistant,
+      Message.tool("call_1", "{\"ok\":true}", "lookup"),
+    ], {
+      thinking: { mode: "native", scope: "tool_call" },
+    });
+
+    assert.deepEqual(serialized.messages, [
+      { role: "system", content: "system" },
+      { role: "user", content: "hello" },
+      reasoningItem,
+      functionCall,
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "{\"ok\":true}",
+      },
+    ]);
+  });
+
+  it("builds Responses requests and maps generic options", () => {
+    const tool: ToolSchema = {
+      type: "function",
+      function: {
+        name: "lookup",
+        description: "Look up a value",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    };
+    const request = new OpenAIResponsesAdapter().buildRequest({
+      model: "gpt-test",
+      serialized: { messages: [{ role: "user", content: "hello" }] },
+      tools: [tool],
+      options: {
+        max_tokens: 256,
+        top_k: 10,
+        seed: 42,
+        stop: ["END"],
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "result", schema: { type: "object" } },
+        },
+        store: false,
+      },
+    });
+
+    assert.deepEqual(request, {
+      model: "gpt-test",
+      input: [{ role: "user", content: "hello" }],
+      stream: true,
+      max_output_tokens: 256,
+      store: false,
+      include: ["reasoning.encrypted_content"],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "result",
+          schema: { type: "object" },
+        },
+      },
+      tools: [{
+        type: "function",
+        name: "lookup",
+        description: "Look up a value",
+        parameters: tool.function.parameters,
+      }],
+    });
+  });
+
+  it("deserializes complete Responses objects", () => {
+    const message = new OpenAIResponsesAdapter().deserialize({
+      model: "gpt-test",
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_1",
+          summary: [{ type: "summary_text", text: "consider" }],
+        },
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "done" }],
+        },
+      ],
+      usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
+    });
+
+    assert.equal(message.model, "gpt-test");
+    assert.equal(message.thinking, "consider");
+    assert.equal(message.text, "done");
+    assert.deepEqual(message.usage?.toJSON(), {
+      promptTokens: 2,
+      completionTokens: 3,
+      totalTokens: 5,
+    });
+  });
+});
+
 describe("AnthropicAdapter", () => {
   it("extracts system messages, merges consecutive roles, and serializes tools/thinking", async () => {
     const adapter = new AnthropicAdapter();
@@ -399,8 +621,14 @@ describe("GeminiAdapter", () => {
     const assistant = Message.assistant([
       { type: "thinking", text: "think" },
       { type: "text", text: "answer" },
-      { type: "tool_call", toolCallId: "ignored", name: "lookup", arguments: "{\"q\":\"x\"}" },
-    ]);
+      {
+        type: "tool_call",
+        toolCallId: "ignored",
+        name: "lookup",
+        arguments: "{\"q\":\"x\"}",
+        metadata: { thoughtSignature: "tool-signature" },
+      },
+    ]).setMeta("geminiThinkingSignature", "thinking-signature");
 
     const result = await adapter.serialize([
       Message.system("sys-a"),
@@ -422,9 +650,12 @@ describe("GeminiAdapter", () => {
       {
         role: "model",
         parts: [
-          { text: "think", thought: true },
+          { text: "think", thought: true, thoughtSignature: "thinking-signature" },
           { text: "answer" },
-          { functionCall: { name: "lookup", args: { q: "x" } } },
+          {
+            functionCall: { name: "lookup", args: { q: "x" } },
+            thoughtSignature: "tool-signature",
+          },
         ],
       },
       {
@@ -488,9 +719,12 @@ describe("GeminiAdapter", () => {
       content: {
         role: "model",
         parts: [
-          { thought: true, text: "think" },
+          { thought: true, text: "think", thoughtSignature: "thinking-signature" },
           { text: "answer" },
-          { functionCall: { name: "lookup", args: { q: "x" } } },
+          {
+            functionCall: { name: "lookup", args: { q: "x" } },
+            thoughtSignature: "tool-signature",
+          },
         ],
       },
     });
@@ -498,6 +732,7 @@ describe("GeminiAdapter", () => {
     assert.equal(msg.role, Role.Assistant);
     assert.equal(msg.thinking, "think");
     assert.equal(msg.text, "answer");
+    assert.equal(msg.metadata.geminiThinkingSignature, "thinking-signature");
     assert.equal(msg.toolCalls.length, 1);
     assert.match(msg.toolCalls[0].toolCallId, /^lookup-/);
     assert.deepEqual(msg.toolCalls[0], {
@@ -505,6 +740,7 @@ describe("GeminiAdapter", () => {
       toolCallId: msg.toolCalls[0].toolCallId,
       name: "lookup",
       arguments: "{\"q\":\"x\"}",
+      metadata: { thoughtSignature: "tool-signature" },
     });
 
     const response = adapter.deserializeResponse({

@@ -33,10 +33,6 @@ export class Session {
   /** 当前指针（指向最新消息） */
   private _cursor: Message;
 
-  /** Usage 缓存 */
-  private _cachedUsage?: Usage;
-  private _usageDirty: boolean = true;
-
   private constructor(root: Message, id?: string) {
     this.id = id || generateId();
     this.createdAt = new Date();
@@ -103,7 +99,6 @@ export class Session {
   addAssistant(message: Message): Message {
     this._cursor.append(message);
     this._cursor = message;
-    this._usageDirty = true;
     return message;
   }
 
@@ -115,7 +110,6 @@ export class Session {
       this._cursor.append(msg);
       this._cursor = msg;
     }
-    this._usageDirty = true;
   }
 
   // ========================
@@ -149,7 +143,6 @@ export class Session {
       throw new Error("目标消息不属于本会话");
     }
     this._cursor = toMessage;
-    this._usageDirty = true;
   }
 
   /**
@@ -296,8 +289,6 @@ export class Session {
     this.root.parts.length = 0;
     this.root.invalidateCache();
     this._cursor = this.root;
-    this._cachedUsage = undefined;
-    this._usageDirty = true;
   }
 
   // ========================
@@ -309,9 +300,6 @@ export class Session {
    * （遍历全树）
    */
   get totalUsage(): Usage {
-    if (!this._usageDirty && this._cachedUsage) {
-      return this._cachedUsage;
-    }
     const all = traverseTree(this.root);
     let total = Usage.zero();
     for (const node of all) {
@@ -319,8 +307,6 @@ export class Session {
         total = total.add(node.usage);
       }
     }
-    this._cachedUsage = total;
-    this._usageDirty = false;
     return total;
   }
 

@@ -20,6 +20,16 @@ export class ToolExecutionError extends Error {
   }
 }
 
+export class ToolArgumentsError extends Error {
+  readonly rawArguments: string;
+
+  constructor(message: string, rawArguments: string) {
+    super(message);
+    this.name = "ToolArgumentsError";
+    this.rawArguments = rawArguments;
+  }
+}
+
 export interface ToolExecutionOptions {
   /** 中断信号：传入 Tool Context，供工具内部响应取消 */
   signal?: AbortSignal;
@@ -121,19 +131,43 @@ export class ToolKit {
   ): Promise<Message> {
     const tool = this._tools.get(toolCallPart.name);
     if (!tool) {
-      //工具不存在，返回错误消息
+      const error = new Error(`未知工具: ${toolCallPart.name}`);
+      if (options?.errorPolicy === "throw") {
+        throw new ToolExecutionError(toolCallPart.toolCallId, toolCallPart.name, error);
+      }
+
       return Message.tool(
         toolCallPart.toolCallId,
-        JSON.stringify({ error: `未知工具: ${toolCallPart.name}` }),
+        JSON.stringify({ error: error.message }),
         toolCallPart.name
-      );
+      ).setMeta("toolExecutionError", {
+        message: error.message,
+        code: "unknown_tool",
+      });
     }
 
-    const args = this.parseArguments(toolCallPart.arguments);
-    const call = tool.create(toolCallPart.toolCallId, args, options?.signal);
-
+    let args: Record<string, unknown>;
     try {
+      args = this.parseArguments(toolCallPart.arguments);
+    } catch (e) {
+      if (options?.errorPolicy === "throw") {
+        throw new ToolExecutionError(toolCallPart.toolCallId, toolCallPart.name, e);
+      }
+
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      return Message.tool(
+        toolCallPart.toolCallId,
+        JSON.stringify({ error: errorMsg, code: "invalid_tool_arguments" }),
+        toolCallPart.name
+      ).setMeta("toolExecutionError", {
+        message: errorMsg,
+        code: "invalid_tool_arguments",
+      });
+    }
+    try {
+      const call = tool.create(toolCallPart.toolCallId, args, options?.signal);
       await call.execute();
+      return call.toMessage();
     } catch (e) {
       if (options?.errorPolicy === "throw") {
         throw new ToolExecutionError(toolCallPart.toolCallId, toolCallPart.name, e);
@@ -145,10 +179,11 @@ export class ToolKit {
         toolCallPart.toolCallId,
         JSON.stringify({ error: errorMsg }),
         toolCallPart.name
-      );
+      ).setMeta("toolExecutionError", {
+        message: errorMsg,
+        code: "tool_execution_error",
+      });
     }
-
-    return call.toMessage();
   }
 
   /**
@@ -166,15 +201,23 @@ export class ToolKit {
   // ========================
 
   private parseArguments(args: string): Record<string, unknown> {
-    try {
-      const parsed = JSON.parse(args);
-      if (typeof parsed === "object" && parsed !== null) {
-        return parsed;
-      }
-      return {};
-    } catch {
+    if (args.trim().length === 0) {
       return {};
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(args);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      throw new ToolArgumentsError(`工具参数不是合法 JSON: ${detail}`, args);
+    }
+
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new ToolArgumentsError("工具参数必须是 JSON 对象", args);
+    }
+
+    return parsed as Record<string, unknown>;
   }
 }
 

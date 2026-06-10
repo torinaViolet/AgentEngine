@@ -118,6 +118,26 @@ describe("Message", () => {
     assert.deepEqual(assistant.getHistory(false), [user, assistant]);
   });
 
+  it("prevents cycles and safely reparents existing nodes", () => {
+    const firstRoot = Message.system("first");
+    const secondRoot = Message.system("second");
+    const user = firstRoot.append(Message.user("hello"));
+    const assistant = user.append(Message.assistant("hi"));
+
+    assert.throws(() => user.append(user), /自身/);
+    assert.throws(() => assistant.append(firstRoot), /祖先/);
+
+    secondRoot.append(user);
+
+    assert.deepEqual(firstRoot.children, []);
+    assert.deepEqual(secondRoot.children, [user]);
+    assert.equal(user.parent, secondRoot);
+    assert.deepEqual(assistant.getHistory(), [secondRoot, user, assistant]);
+
+    secondRoot.append(user);
+    assert.deepEqual(secondRoot.children, [user]);
+  });
+
   it("omits an empty system root from included history", () => {
     const root = Message.emptySystem();
     const user = root.append(Message.user("hello"));

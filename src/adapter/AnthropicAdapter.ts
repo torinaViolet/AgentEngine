@@ -13,6 +13,7 @@ import {
   MessageAdapter,
   SerializedResult,
   SerializeOptions,
+  BuildModelRequestInput,
   normalizeThinkingOptions,
   shouldSerializeThinking,
 } from "./MessageAdapter";
@@ -87,6 +88,35 @@ export class AnthropicAdapter implements MessageAdapter {
       systemMessage:
         systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
     };
+  }
+
+  buildRequest(input: BuildModelRequestInput): Record<string, unknown> {
+    const options = { ...input.options };
+    if (options.stop !== undefined && options.stop_sequences === undefined) {
+      options.stop_sequences = options.stop;
+      delete options.stop;
+    }
+
+    const request: Record<string, unknown> = {
+      model: input.model,
+      messages: input.serialized.messages,
+      ...options,
+      stream: input.stream ?? true,
+    };
+
+    if (input.serialized.systemMessage) {
+      request.system = input.serialized.systemMessage;
+    }
+
+    if (input.tools && input.tools.length > 0) {
+      request.tools = input.tools.map((tool) => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        input_schema: tool.function.parameters,
+      }));
+    }
+
+    return request;
   }
 
   // ---- Assistant 消息 ----
@@ -349,6 +379,21 @@ export class AnthropicAdapter implements MessageAdapter {
     }
 
     return message;
+  }
+
+  getFinishReason(raw: unknown): string | undefined {
+    const stopReason = (raw as Record<string, unknown>).stop_reason as string | undefined;
+    switch (stopReason) {
+      case "max_tokens":
+        return "length";
+      case "tool_use":
+        return "tool_calls";
+      case "end_turn":
+      case "stop_sequence":
+        return "stop";
+      default:
+        return stopReason;
+    }
   }
 
   // ========================

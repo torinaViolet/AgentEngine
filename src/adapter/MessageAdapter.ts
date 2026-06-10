@@ -1,4 +1,6 @@
 import { Message } from "../message";
+import type { ToolSchema } from "../tool/Tool";
+import type { FinishReason } from "../stream/StreamEvent";
 
 /** 思考内容序列化模式 */
 export type ThinkingSerializationMode = "none" | "native" | "message" | "auto";
@@ -53,6 +55,16 @@ export interface SerializedResult {
   systemMessage?: string;
 }
 
+/** Input used by adapters to build a provider-native streaming request. */
+export interface BuildModelRequestInput {
+  model: string;
+  serialized: SerializedResult;
+  tools?: ToolSchema[];
+  options: Record<string, unknown>;
+  /** Whether the provider should return a stream. Defaults to true. */
+  stream?: boolean;
+}
+
 /**
  * 消息适配器接口
  *
@@ -66,8 +78,17 @@ export interface MessageAdapter {
   /** 统一 Message[] → 平台 JSON */
   serialize(messages: Message[], options?: SerializeOptions): Promise<SerializedResult>;
 
+  /** Build the provider-native request sent by ModelClient. */
+  buildRequest?(input: BuildModelRequestInput): Record<string, unknown>;
+
   /** 平台 JSON响应 → 统一 Message */
   deserialize(raw: unknown): Message;
+
+  /** Deserialize a provider's complete, non-streaming response. */
+  deserializeResponse?(raw: unknown): Message;
+
+  /** Extract and normalize the completion reason from a complete response. */
+  getFinishReason?(raw: unknown): FinishReason | undefined;
 }
 
 /**
