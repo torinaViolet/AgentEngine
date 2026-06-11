@@ -38,6 +38,22 @@ const reply = await agent.run("用一句话介绍 AgentEngine。", {
 
 流式与非流式模式使用同一套 `Message`、Session 和工具调用循环。
 
+如果上下文已经写入当前 `Session`，可以直接生成 Assistant：
+
+```ts
+session.addUser("已经准备好的上下文");
+const reply = await agent.generate();
+```
+
+在 Assistant 写入 Session 前执行可等待转换：
+
+```ts
+agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, async (event) => {
+  const transformed = await transformText(event.message.text);
+  event.message.setText(transformed);
+});
+```
+
 ## 适合做什么
 
 - 构建带工具调用的 AI Agent
@@ -58,6 +74,7 @@ const reply = await agent.run("用一句话介绍 AgentEngine。", {
 - **请求配置器**：链式构建 temperature、top_p、max_tokens、response_format 等参数。
 - **低耦合 Provider**：Client、Adapter、Parser 三层可独立替换，内置 OpenAI Compatible、OpenAI Responses、Anthropic 和 Gemini 预设。
 - **流式与非流式**：同一套 Agent、Session 和工具循环同时支持增量 stream 与完整响应。
+- **浏览器安全入口**：根入口不包含 Node.js builtin，本地文件解析通过显式 `./node` 子入口使用。
 - **中断与恢复**：支持 abort、timeout、partial message、continue 和 resume。
 - **工具审批**：支持自动审批、自定义审批、手动审批和审批超时策略。
 
@@ -87,6 +104,12 @@ npm install @modelcontextprotocol/sdk
 
 - Node.js >= 18
 - TypeScript 项目推荐开启 `strict`
+
+根入口可直接用于浏览器和 WebView。Node.js 中需要读取本地媒体文件时：
+
+```ts
+import { DefaultMediaResolver } from "@notic/agent-engine/node";
+```
 
 ## 快速开始
 
@@ -273,7 +296,7 @@ AgentEngine
 ├─ Client    传输边界：流式请求、完整响应、中断信号
 ├─ Adapter   消息转换：OpenAI、Responses、Anthropic、Gemini
 ├─ Provider  Client + Adapter + Parser 的低耦合组合
-├─ Media     媒体解析：data URI、HTTP、本地文件
+├─ Media     媒体解析：浏览器默认实现 + Node 本地文件子入口
 └─ Agent     编排层：自动循环、审批、中断、恢复
 ```
 
@@ -286,6 +309,7 @@ AgentEngine
 - 工具调用和工具结果
 - thinking 内容
 - 标签、元数据和树结构
+- `setText()` / `setParts()` 安全替换内容并自动失效缓存
 
 ### Session
 
@@ -364,6 +388,7 @@ Provider 提供平台预设，但不接管 Agent 执行流程：
 - 管理 `Session`
 - 调用模型 stream
 - 派发事件
+- 在 Assistant 提交 Session 前等待生命周期转换
 - 执行工具循环
 - 处理工具审批
 - 中断、超时、恢复和继续

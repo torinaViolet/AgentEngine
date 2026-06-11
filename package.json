@@ -1,6 +1,6 @@
 {
   "name": "@notic/agent-engine",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "A lightweight, elegant, and feature-complete TypeScript AI Agent framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,6 +24,10 @@
     "./stream": {
       "types": "./dist/stream/index.d.ts",
       "default": "./dist/stream/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "sideEffects": false,
@@ -37,7 +41,9 @@
   "scripts": {
     "build": "tsc",
     "clean": "rimraf dist",
-    "test": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/**/*.test.js",
+    "test": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/**/*.test.js && npm run test:browser && npm run test:exports",
+    "test:browser": "rimraf .browser-dist && esbuild ./test/browser-smoke.ts --bundle --platform=browser --format=esm --outfile=./.browser-dist/index.js",
+    "test:exports": "npm run clean && npm run build && node test/package-exports.cjs",
     "test:real:deepseek": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/test/agent/agent.real.test.js",
     "prepublishOnly": "npm test && npm run clean && npm run build"
   },
@@ -84,6 +90,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "@types/node": "^25.6.0",
+    "esbuild": "^0.28.0",
     "openai": "^6.34.0",
     "rimraf": "^6.0.0",
     "typescript": "^5.5.3",

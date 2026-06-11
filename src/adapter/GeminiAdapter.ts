@@ -8,7 +8,7 @@ import {
   AudioPart,
 } from "../message/MessagePart";
 import { MediaResolver } from "../media/MediaResolver";
-import { DefaultMediaResolver } from "../media/DefaultMediaResolver";
+import { BrowserMediaResolver } from "../media/BrowserMediaResolver";
 import { generateId } from "../utils";
 import {
   MessageAdapter,
@@ -44,7 +44,7 @@ export class GeminiAdapter implements MessageAdapter {
   private resolver: MediaResolver;
 
   constructor(resolver?: MediaResolver) {
-    this.resolver = resolver || new DefaultMediaResolver();
+    this.resolver = resolver || new BrowserMediaResolver();
   }
 
   // ========================

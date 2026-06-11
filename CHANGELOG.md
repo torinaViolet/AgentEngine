@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.0 - 2026-06-11
+
+### Added
+
+- `agent.generate()` for generating from the current Session without appending a User message.
+- Awaitable `BEFORE_ASSISTANT_COMMIT` lifecycle handlers before Session persistence.
+- `agent.emitAsync()` for ordered, error-propagating asynchronous events.
+- Safe `Message.setText()` and `Message.setParts()` mutation APIs.
+- Browser-safe `BrowserMediaResolver` and an explicit `@notic/agent-engine/node` media subpath.
+- Browser bundling and package export smoke tests.
+
+### Changed
+
+- Built-in adapters now default to `BrowserMediaResolver` so the package root contains no Node.js builtin imports.
+- Local file media resolution now requires `DefaultMediaResolver` from `@notic/agent-engine/node` or a custom resolver.
+
+### Breaking
+
+- `DefaultMediaResolver` is no longer exported from the package root. Import it from `@notic/agent-engine/node` in Node.js applications.
+
 ## 1.2.0 - 2026-06-11
 
 ### Added

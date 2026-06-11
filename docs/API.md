@@ -264,6 +264,8 @@ const restored = Message.fromJSON(json);
 | `addImage(url, mimeType?)` | 追加图片 |
 | `addAudio(url, mimeType?)` | 追加音频 |
 | `addFile(url, options?)` | 追加文件 |
+| `setText(text)` | 替换全部文本并保留非文本 part |
+| `setParts(content)` | 替换全部消息内容并自动失效缓存 |
 | `tag(...names)` / `untag(...names)` | 管理标签 |
 | `setMeta(key, value)` | 写入元数据 |
 | `append(child)` | 追加子节点 |
@@ -702,6 +704,7 @@ console.log(done?.message.text);
 | `TOOL_EXECUTE_START` | 工具开始执行 |
 | `TOOL_EXECUTE_DONE` | 工具执行完成 |
 | `TOOL_EXECUTE_ERROR` | 工具执行失败 |
+| `BEFORE_ASSISTANT_COMMIT` | Assistant 写入 Session 前；监听器会按注册顺序等待完成 |
 
 ## Prompt：提示词构建
 
@@ -1153,10 +1156,11 @@ const agent = new Agent({
 
 ### 自定义 MediaResolver
 
-多模态消息里可能有本地文件、HTTP 文件或 data URI。`OpenAIAdapter` 可以接收媒体解析器：
+多模态消息里可能有本地文件、HTTP 文件或 data URI。Adapter 可以接收媒体解析器。根入口默认使用浏览器安全的 `BrowserMediaResolver`；Node.js 读取本地文件时使用显式子入口：
 
 ```ts
-import { DefaultMediaResolver, OpenAIAdapter } from "@notic/agent-engine";
+import { OpenAIAdapter } from "@notic/agent-engine";
+import { DefaultMediaResolver } from "@notic/agent-engine/node";
 
 const adapter = new OpenAIAdapter(new DefaultMediaResolver());
 ```
@@ -1207,19 +1211,32 @@ interface MediaResolver {
 }
 ```
 
-默认实现：
+浏览器默认实现：
 
 ```ts
-import { DefaultMediaResolver } from "@notic/agent-engine";
+import { BrowserMediaResolver } from "@notic/agent-engine";
+
+const resolver = new BrowserMediaResolver();
+const file = await resolver.resolve("https://example.com/image.png");
+```
+
+`BrowserMediaResolver` 支持：
+
+- `data:` URI
+- HTTP / HTTPS URL
+- `blob:` URL
+
+Node.js 本地文件解析器：
+
+```ts
+import { DefaultMediaResolver } from "@notic/agent-engine/node";
 
 const resolver = new DefaultMediaResolver();
 const file = await resolver.resolve("./image.png");
 ```
 
-`DefaultMediaResolver` 支持：
+`DefaultMediaResolver` 额外支持：
 
-- `data:` URI
-- HTTP / HTTPS URL
 - 本地文件路径
 
 无法识别 MIME 时，会退回到 `application/octet-stream`。
@@ -1293,6 +1310,13 @@ const input = Message.user("这条消息带标签").tag("task");
 const reply = await agent.runWith(input);
 ```
 
+当前 `Session` 已经准备好上下文时，直接生成 Assistant，不追加 User 消息：
+
+```ts
+session.addUser("预先构建的上下文");
+const reply = await agent.generate();
+```
+
 不写入 `Session`，直接跑一次 raw 请求：
 
 ```ts
@@ -1327,6 +1351,16 @@ agent.setHandlerErrorHandler((error, event) => {
   logger.warn({ error, event }, "Agent event handler failed");
 });
 ```
+
+普通 `emit()` 事件仍是非阻塞通知，异步 handler 失败只会上报。提交前转换使用可等待的生命周期：
+
+```ts
+agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, async (event) => {
+  event.message.setText(await transformText(event.message.text));
+});
+```
+
+该事件位于 `MESSAGE_DONE` 之后、Session 写入之前。监听器按注册顺序执行；失败会中止本轮提交，避免保存未转换文本。自定义流程也可以显式调用 `await agent.emitAsync(event)` 获得相同的等待和错误传播语义。
 
 ### 请求级参数
 

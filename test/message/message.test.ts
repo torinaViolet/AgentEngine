@@ -91,6 +91,52 @@ describe("Message", () => {
     assert.equal(msg.text, "cached stale-until-invalidated");
   });
 
+  it("safely replaces text while preserving non-text parts", () => {
+    const msg = Message.assistant([
+      { type: "thinking", text: "reasoning" },
+      { type: "text", text: "first" },
+      { type: "text", text: " second" },
+      {
+        type: "tool_call",
+        toolCallId: "call_1",
+        name: "lookup",
+        arguments: "{}",
+      },
+    ]);
+
+    assert.equal(msg.text, "first second");
+    msg.setText("transformed");
+
+    assert.equal(msg.text, "transformed");
+    assert.equal(msg.thinking, "reasoning");
+    assert.equal(msg.toolCalls.length, 1);
+    assert.deepEqual(msg.parts.map((part) => part.type), [
+      "thinking",
+      "text",
+      "tool_call",
+    ]);
+
+    msg.setText("");
+    assert.equal(msg.text, "");
+    assert.deepEqual(msg.parts.map((part) => part.type), [
+      "thinking",
+      "tool_call",
+    ]);
+  });
+
+  it("replaces all parts through setParts and invalidates caches", () => {
+    const msg = Message.assistant("cached");
+    assert.equal(msg.text, "cached");
+
+    msg.setParts([
+      { type: "thinking", text: "new reasoning" },
+      { type: "text", text: "new text" },
+    ]);
+
+    assert.equal(msg.text, "new text");
+    assert.equal(msg.thinking, "new reasoning");
+  });
+
   it("manages tags with a chainable API", () => {
     const msg = Message.user("hello").tag("important", "context");
 

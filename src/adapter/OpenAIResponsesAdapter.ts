@@ -1,4 +1,4 @@
-import { DefaultMediaResolver } from "../media/DefaultMediaResolver";
+import { BrowserMediaResolver } from "../media/BrowserMediaResolver";
 import { MediaResolver } from "../media/MediaResolver";
 import { Message } from "../message/Message";
 import { AudioPart, FilePart, ImagePart, MessagePart } from "../message/MessagePart";
@@ -23,7 +23,7 @@ export class OpenAIResponsesAdapter implements MessageAdapter {
   private readonly resolver: MediaResolver;
 
   constructor(resolver?: MediaResolver) {
-    this.resolver = resolver ?? new DefaultMediaResolver();
+    this.resolver = resolver ?? new BrowserMediaResolver();
   }
 
   async serialize(

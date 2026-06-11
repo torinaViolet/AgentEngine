@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DefaultMediaResolver } from "../../src/media";
+import { BrowserMediaResolver, DefaultMediaResolver } from "../../src/media";
 
 const originalFetch = globalThis.fetch;
 
@@ -106,6 +106,39 @@ describe("DefaultMediaResolver", () => {
     await assert.rejects(
       () => resolver.resolve("https://example.com/missing"),
       /Failed to fetch https:\/\/example\.com\/missing: 404 Not Found/
+    );
+  });
+});
+
+describe("BrowserMediaResolver", () => {
+  it("resolves data URIs without Node.js builtins", async () => {
+    const resolver = new BrowserMediaResolver();
+
+    assert.deepEqual(await resolver.resolve("data:text/plain;base64,aGVsbG8="), {
+      mimeType: "text/plain",
+      base64: "aGVsbG8=",
+    });
+  });
+
+  it("resolves fetched resources and strips content-type parameters", async () => {
+    globalThis.fetch = (async () => new Response("browser", {
+      status: 200,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    })) as typeof fetch;
+    const resolver = new BrowserMediaResolver();
+
+    assert.deepEqual(await resolver.resolve("https://example.com/browser.txt"), {
+      mimeType: "text/plain",
+      base64: Buffer.from("browser").toString("base64"),
+    });
+  });
+
+  it("rejects local paths with guidance for the Node subpath", async () => {
+    const resolver = new BrowserMediaResolver();
+
+    await assert.rejects(
+      () => resolver.resolve("C:\\tmp\\local.png"),
+      /@notic\/agent-engine\/node/
     );
   });
 });

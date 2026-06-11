@@ -30,8 +30,8 @@ export { AnthropicAdapter } from "./adapter";
 export { GeminiAdapter } from "./adapter";
 
 // ===== Media =====
-export { MediaResolver, ResolvedMedia } from "./media";
-export { DefaultMediaResolver } from "./media";
+export type { MediaResolver, ResolvedMedia } from "./media/MediaResolver";
+export { BrowserMediaResolver } from "./media/BrowserMediaResolver";
 
 // ===== Session =====
 export { MatchMode, Priority, SearchCriteria } from "./session";
@@ -73,6 +73,7 @@ export {
   ToolExecuteStartEvent,
   ToolExecuteDoneEvent,
   ToolExecuteErrorEvent,
+  BeforeAssistantCommitEvent,
   MessageDoneEvent,
   TurnStartEvent,
   TurnEndEvent,

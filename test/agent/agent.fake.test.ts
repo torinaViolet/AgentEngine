@@ -563,4 +563,76 @@ describe("Agent fake client", () => {
     await waitFor(() => handlerErrors.length === 1);
     assert.match(handlerErrors[0].message, /async handler failed/);
   });
+
+  it("generates from the current Session without appending a user message", async () => {
+    const client = new FakeOpenAIClient().enqueue(textChunks("generated reply"));
+    const session = Session.create("system");
+    session.addUser("prepared user context");
+    const agent = new Agent({ client, model: "fake-model", session });
+
+    const reply = await agent.generate();
+
+    assert.equal(reply.text, "generated reply");
+    assert.deepEqual(session.history().map((message) => message.text), [
+      "system",
+      "prepared user context",
+      "generated reply",
+    ]);
+    assert.deepEqual(
+      (client.calls[0].params.messages as Array<{ content: string }>).map(
+        (message) => message.content
+      ),
+      ["system", "prepared user context"]
+    );
+  });
+
+  it("awaits assistant commit handlers in order before storing the reply", async () => {
+    const client = new FakeOpenAIClient().enqueue(textChunks("raw reply"));
+    const session = Session.create();
+    const agent = new Agent({ client, model: "fake-model", session });
+    const events: string[] = [];
+
+    agent.on(StreamEventType.MESSAGE_DONE, () => events.push("message_done"));
+    agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, async (event) => {
+      events.push("before_first");
+      await Promise.resolve();
+      event.message.setText(`${event.message.text} first`);
+    });
+    agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, (event) => {
+      events.push("before_second");
+      event.message.setText(`${event.message.text} second`);
+    });
+    agent.on(StreamEventType.TURN_END, () => events.push("turn_end"));
+
+    const reply = await agent.run("transform this");
+
+    assert.equal(reply.text, "raw reply first second");
+    assert.equal(session.cursor, reply);
+    assert.deepEqual(events, [
+      "message_done",
+      "before_first",
+      "before_second",
+      "turn_end",
+    ]);
+  });
+
+  it("does not commit an assistant when a required lifecycle handler fails", async () => {
+    const client = new FakeOpenAIClient().enqueue(textChunks("raw reply"));
+    const session = Session.create();
+    const agent = new Agent({ client, model: "fake-model", session });
+    const handlerErrors: Error[] = [];
+
+    agent.setHandlerErrorHandler((error) => handlerErrors.push(error));
+    agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, async () => {
+      throw new Error("transform failed");
+    });
+
+    await assert.rejects(agent.run("do not commit"), /transform failed/);
+
+    assert.deepEqual(session.history().map((message) => message.text), [
+      "do not commit",
+    ]);
+    assert.equal(handlerErrors.length, 1);
+    assert.equal(agent.lastRunState?.status, "failed");
+  });
 });

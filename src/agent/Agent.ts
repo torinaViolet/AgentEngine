@@ -1,5 +1,6 @@
 import { Message } from "../message/Message";
 import { MessagePart } from "../message/MessagePart";
+import { Role } from "../message/Role";
 import { MessageAdapter } from "../adapter/MessageAdapter";
 import type { SerializeOptions, ThinkingSerializationMode } from "../adapter/MessageAdapter";
 import { OpenAIAdapter } from "../adapter/OpenAIAdapter";
@@ -17,6 +18,7 @@ import {
   StreamEvent,
   StreamEventType,
   StreamEventMap,
+  BeforeAssistantCommitEvent,
 } from "../stream/StreamEvent";
 import { PromptBuilder } from "../prompt/PromptBuilder";
 import type { BuildOptions } from "../prompt/PromptBuilder";
@@ -428,6 +430,15 @@ export class Agent {
   }
 
   /**
+   * 基于当前 Session 直接生成 Assistant，不自动追加新的 User 消息。
+   * 适合调用方已经通过 Session、Inserter 或 PromptBuilder 准备好上下文的场景。
+   */
+  async generate(options?: AgentRunOptions): Promise<Message> {
+    this.ensureIdle();
+    return this.executeLoop(options);
+  }
+
+  /**
    * 直接传入历史运行（不走Session）
    */
   async runRaw(
@@ -682,14 +693,30 @@ export class Agent {
         this.emit({ type: StreamEventType.TURN_START, turn });
 
         // 流式调用 + 解析
-        const { assistantMsg, finishReason } = parser
+        const response = parser
           ? await this.executeSingleStream(parser, mergedOptions, run)
           : await this.executeSingleComplete(mergedOptions, run);
+
+        // 模型响应已经完整返回；提交前生命周期失败时不应回退为未转换的 partial。
+        currentParser = undefined;
+
+        const commitEvent: BeforeAssistantCommitEvent = {
+          type: StreamEventType.BEFORE_ASSISTANT_COMMIT,
+          message: response.assistantMsg,
+          turn,
+          finishReason: response.finishReason,
+        };
+        await this.emitAsync(commitEvent);
+
+        const assistantMsg = commitEvent.message;
+        const finishReason = response.finishReason;
+        if (assistantMsg.role !== Role.Assistant) {
+          throw new Error("BEFORE_ASSISTANT_COMMIT 必须返回 Assistant 消息");
+        }
 
         // 添加到 Session
         this._session.addAssistant(assistantMsg);
         lastAssistantMsg = assistantMsg;
-        currentParser = undefined;
         partialAlreadyPersisted = true;
         this.updateRunState({ lastMessage: assistantMsg });
 
@@ -994,7 +1021,7 @@ export class Agent {
    *   agent.emit({ type: "abort" });
    */
   emit(event: StreamEvent | CustomEvent): void {
-    const handlers = this._handlers.get(event.type) || [];
+    const handlers = [...(this._handlers.get(event.type) || [])];
     for (const handler of handlers) {
       try {
         const result = handler(event);
@@ -1005,6 +1032,24 @@ export class Agent {
         }
       } catch (e) {
         this.reportHandlerError(e, event);
+      }
+    }
+  }
+
+  /**
+   * 按注册顺序等待事件监听器完成。
+   *
+   * 与 emit() 的通知语义不同，监听器失败会在上报后继续向调用方抛出，
+   * 适合提交前转换等必须完成后才能继续的生命周期。
+   */
+  async emitAsync(event: StreamEvent | CustomEvent): Promise<void> {
+    const handlers = [...(this._handlers.get(event.type) || [])];
+    for (const handler of handlers) {
+      try {
+        await handler(event);
+      } catch (error) {
+        this.reportHandlerError(error, event);
+        throw error;
       }
     }
   }

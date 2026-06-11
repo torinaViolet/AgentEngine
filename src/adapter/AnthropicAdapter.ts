@@ -8,7 +8,7 @@ import {
   AudioPart,
 } from "../message/MessagePart";
 import { MediaResolver } from "../media/MediaResolver";
-import { DefaultMediaResolver } from "../media/DefaultMediaResolver";
+import { BrowserMediaResolver } from "../media/BrowserMediaResolver";
 import {
   MessageAdapter,
   SerializedResult,
@@ -42,7 +42,7 @@ export class AnthropicAdapter implements MessageAdapter {
   private resolver: MediaResolver;
 
   constructor(resolver?: MediaResolver) {
-    this.resolver = resolver || new DefaultMediaResolver();
+    this.resolver = resolver || new BrowserMediaResolver();
   }
 
   // ========================

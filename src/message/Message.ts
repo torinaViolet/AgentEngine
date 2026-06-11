@@ -143,6 +143,42 @@ export class Message {
     return this.invalidateCache();
   }
 
+  /** 替换消息的全部内容，并自动失效 getter 缓存。 */
+  setParts(content: string | MessagePart | MessagePart[]): this {
+    const parts = Message.normalizeParts(content);
+    this.parts.splice(0, this.parts.length, ...parts);
+    return this.invalidateCache();
+  }
+
+  /**
+   * 替换消息中的全部文本，同时保留 thinking、媒体和工具调用等非文本 part。
+   * 多个 TextPart 会合并为一个；空字符串会移除全部 TextPart。
+   */
+  setText(text: string): this {
+    const firstTextIndex = this.parts.findIndex((part) => part.type === "text");
+
+    if (firstTextIndex === -1) {
+      if (text) this.parts.push({ type: "text", text });
+      return this.invalidateCache();
+    }
+
+    const nextParts: MessagePart[] = [];
+    let inserted = false;
+    for (const part of this.parts) {
+      if (part.type !== "text") {
+        nextParts.push(part);
+        continue;
+      }
+      if (!inserted && text) {
+        nextParts.push({ type: "text", text });
+        inserted = true;
+      }
+    }
+
+    this.parts.splice(0, this.parts.length, ...nextParts);
+    return this.invalidateCache();
+  }
+
   setMeta(key: string, value: unknown): this {
     this.metadata[key] = value;
     return this;

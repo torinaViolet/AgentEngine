@@ -39,6 +39,8 @@ export enum StreamEventType {
   TOOL_EXECUTE_DONE = "tool_execute_done",
   /** 工具执行失败 */
   TOOL_EXECUTE_ERROR = "tool_execute_error",
+  /** Assistant 写入 Session 前的可等待生命周期 */
+  BEFORE_ASSISTANT_COMMIT = "before_assistant_commit",
   /** 整条消息组装完毕 */
   MESSAGE_DONE = "message_done",
   /** 新一轮循环开始 */
@@ -160,6 +162,16 @@ export interface ToolExecuteErrorEvent {
   result?: Message;
 }
 
+export interface BeforeAssistantCommitEvent {
+  type: StreamEventType.BEFORE_ASSISTANT_COMMIT;
+  /** 即将写入 Session 的 Assistant，可直接安全修改或替换 */
+  message: Message;
+  /** 当前 Agent turn */
+  turn: number;
+  /** 模型完成原因，例如 stop / length / tool_calls */
+  finishReason?: FinishReason;
+}
+
 export interface MessageDoneEvent {
   type: StreamEventType.MESSAGE_DONE;
   /** 组装完成的 Message */
@@ -204,6 +216,7 @@ export type StreamEvent =
   | ToolExecuteStartEvent
   | ToolExecuteDoneEvent
   | ToolExecuteErrorEvent
+  | BeforeAssistantCommitEvent
   | MessageDoneEvent
   | TurnStartEvent
   | TurnEndEvent
@@ -233,6 +246,7 @@ export interface StreamEventMap {
   [StreamEventType.TOOL_EXECUTE_START]: ToolExecuteStartEvent;
   [StreamEventType.TOOL_EXECUTE_DONE]: ToolExecuteDoneEvent;
   [StreamEventType.TOOL_EXECUTE_ERROR]: ToolExecuteErrorEvent;
+  [StreamEventType.BEFORE_ASSISTANT_COMMIT]: BeforeAssistantCommitEvent;
   [StreamEventType.MESSAGE_DONE]: MessageDoneEvent;
   [StreamEventType.TURN_START]: TurnStartEvent;
   [StreamEventType.TURN_END]: TurnEndEvent;

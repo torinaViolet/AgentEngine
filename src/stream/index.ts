@@ -16,6 +16,7 @@ export {
   ToolExecuteStartEvent,
   ToolExecuteDoneEvent,
   ToolExecuteErrorEvent,
+  BeforeAssistantCommitEvent,
   MessageDoneEvent,
   TurnStartEvent,
   TurnEndEvent,
