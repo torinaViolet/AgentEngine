@@ -139,6 +139,22 @@ describe("PromptBuilder", () => {
     assert.equal(built[7].role, Role.Assistant);
   });
 
+  it("allows empty messages as anchors and drops them from the final build", () => {
+    const root = Message.emptySystem();
+    const user = root.append(Message.user("hello"));
+    const history = user.getHistory();
+    const builder = new PromptBuilder();
+
+    builder.injectSystem(Rule.top().after(), "context");
+
+    assert.deepEqual(history, [root, user]);
+    assert.deepEqual(texts(builder.build(history)), ["context", "hello"]);
+    assert.deepEqual(
+      texts(builder.build(history, { dropEmptyMessages: false })),
+      ["", "context", "hello"]
+    );
+  });
+
   it("orders same-index insertions by Rule.order and then registration sequence", () => {
     const history = fixtureHistory();
     const builder = new PromptBuilder();

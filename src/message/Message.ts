@@ -323,8 +323,6 @@ export class Message {
    * 从根节点到当前节点的完整路径
    *
    * @param includeRoot 是否包含根节点，默认 true。
-   *当为 true 时，如果根节点是空 System 消息（parts 为空），
-   *则自动跳过，避免向不支持空消息的 API 发送空 System 消息。
    */
   getHistory(includeRoot: boolean = true): Message[] {
     const path: Message[] = [];
@@ -335,16 +333,6 @@ export class Message {
       node = node.parent!;
     }
     if (!includeRoot && path.length > 0 && path[0].isRoot) {
-      path.shift();
-    }
-    //跳过空的根节点（parts 为空的System 消息）
-    if (
-      includeRoot &&
-      path.length > 0 &&
-      path[0].isRoot &&
-      path[0].role === Role.System &&
-      path[0].parts.length === 0
-    ) {
       path.shift();
     }
     return path;
@@ -402,6 +390,26 @@ export class Message {
       (p) => p.type === "image" || p.type === "audio" || p.type === "file"
     );
     return this._hasMediaCache;
+  }
+
+  /**
+   * 是否为空消息。
+   *
+   * 只包含空 text/thinking part 或没有 parts 的消息视为空；
+   * 媒体、工具调用和工具结果即使文本载荷为空，也保留为有效消息。
+   */
+  get isEmpty(): boolean {
+    return !this.parts.some((part) => {
+      if (part.type === "text" || part.type === "thinking") {
+        return part.text.length > 0;
+      }
+      return true;
+    });
+  }
+
+  /** 返回移除空消息后的新数组，不修改原数组。 */
+  static pruneEmpty(messages: Message[]): Message[] {
+    return messages.filter((message) => !message.isEmpty);
   }
 
   /**

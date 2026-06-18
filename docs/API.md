@@ -260,6 +260,8 @@ const restored = Message.fromJSON(json);
 | `Message.emptySystem()` | 创建空系统根节点 |
 | `Message.tool(toolCallId, result, name?)` | 创建工具结果消息 |
 | `Message.assistantToolCalls(calls)` | 创建带工具调用的助手消息 |
+| `isEmpty` | 判断是否为空消息 |
+| `Message.pruneEmpty(messages)` | 返回移除空消息后的新数组 |
 | `addText(text)` | 追加文本 |
 | `addImage(url, mimeType?)` | 追加图片 |
 | `addAudio(url, mimeType?)` | 追加音频 |
@@ -284,11 +286,12 @@ import { Session } from "@notic/agent-engine";
 const session = Session.create("你是一个代码助手。");
 ```
 
-如果不传系统提示，会创建一个空 system root。空 root 在 `history()` 中会被自动跳过，避免发给不支持空系统消息的平台。
+如果不传系统提示，会创建一个空 system root。这个 root 会保留在 `history()` 中，便于查询、插入和 `PromptBuilder` 定位；真正构建模型请求时，`Agent` 会自动移除空消息，避免发给不支持空系统消息的平台。
 
 ```ts
 const session = Session.create();
-session.history(); // []
+session.history(); // [empty system root]
+session.history(false); // []
 ```
 
 ### 手动追加消息
@@ -298,7 +301,7 @@ session.addUser("你好");
 session.addAssistant(Message.assistant("你好，我在。"));
 
 session.history().map((msg) => msg.text);
-// ["你好", "你好，我在。"]
+// ["", "你好", "你好，我在。"]
 ```
 
 如果你已经有完整 `Message` 对象，用 `addMessage()`：
@@ -734,6 +737,25 @@ const context = builder.build(session.history());
 
 `Rule.top().after()` 的意思是：定位到第一条消息，在它后面插入。
 
+如果 `history` 里包含空 system root，它也可以作为定位锚点。`build()` 会在所有注入和数组操作完成后默认移除空消息，因此空 root 可参与定位，但不会进入最终上下文：
+
+```ts
+const session = Session.create();
+session.addUser("你好");
+
+const builder = new PromptBuilder();
+builder.injectSystem(Rule.top().after(), "运行时上下文");
+
+builder.build(session.history()).map((msg) => msg.text);
+// ["运行时上下文", "你好"]
+```
+
+需要保留空消息用于调试时，可以传入：
+
+```ts
+builder.build(session.history(), { dropEmptyMessages: false });
+```
+
 ### 按角色定位
 
 ```ts
@@ -862,9 +884,9 @@ builder.transform((messages) => messages.reverse());
 | `clearInjections()` | 清空 injection |
 | `clearOperations()` | 清空操作管线 |
 | `clear()` | 清空 injection 和 operation |
-| `build(history, options?)` | 生成临时上下文 |
-| `buildBatch(history)` | batch 构建 |
-| `buildImmediate(history)` | immediate 构建 |
+| `build(history, options?)` | 生成临时上下文，默认移除空消息 |
+| `buildBatch(history, options?)` | batch 构建 |
+| `buildImmediate(history, options?)` | immediate 构建 |
 
 ## Config：请求参数
 

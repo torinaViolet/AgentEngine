@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.0 - 2026-06-19
+
+### Added
+
+- `Message.isEmpty` and `Message.pruneEmpty()` for shared empty-message handling.
+- `PromptBuilder` support for using empty messages as anchors while dropping them from the final context by default.
+- `dropEmptyMessages: false` build option for debugging or custom context pipelines that need to retain empty messages.
+
+### Changed
+
+- `Message.getHistory(true)` now preserves an empty system root instead of silently omitting it.
+- `Agent` prunes empty messages at the model request boundary, including `runRaw()`, so incompatible providers do not receive empty messages.
+- API documentation now describes empty-root history behavior and PromptBuilder empty-message cleanup.
+
 ## 2.0.0 - 2026-06-11
 
 ### Added

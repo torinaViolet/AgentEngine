@@ -39,6 +39,12 @@ export interface BuildOptions {
    * - immediate：即时插入，后续 Injection 可以看到前序 Injection 已插入的消息
    */
   strategy?: BuildStrategy;
+  /**
+   * 是否在最终结果中移除空消息，默认 true。
+   *
+   * 空消息仍可参与 Rule 定位和操作管线，清理只发生在 build 的最后一步。
+   */
+  dropEmptyMessages?: boolean;
 }
 
 /**
@@ -439,9 +445,10 @@ export class PromptBuilder {
    */
   build(history: Message[], options?: BuildOptions): Message[] {
     const strategy = options?.strategy ?? "batch";
-    return strategy === "immediate"
+    const result = strategy === "immediate"
       ? this.buildImmediateInternal(history)
-      : this.buildBatch(history);
+      : this.buildBatchInternal(history);
+    return this.finalizeBuild(result, options);
   }
 
   /**
@@ -449,8 +456,11 @@ export class PromptBuilder {
    *
    * 等价于：build(history, { strategy: "immediate" })
    */
-  buildImmediate(history: Message[]): Message[] {
-    return this.buildImmediateInternal(history);
+  buildImmediate(
+    history: Message[],
+    options?: Pick<BuildOptions, "dropEmptyMessages">
+  ): Message[] {
+    return this.finalizeBuild(this.buildImmediateInternal(history), options);
   }
 
   /**
@@ -458,7 +468,14 @@ export class PromptBuilder {
    *
    * 等价于：build(history, { strategy: "batch" })，也是默认行为。
    */
-  buildBatch(history: Message[]): Message[] {
+  buildBatch(
+    history: Message[],
+    options?: Pick<BuildOptions, "dropEmptyMessages">
+  ): Message[] {
+    return this.finalizeBuild(this.buildBatchInternal(history), options);
+  }
+
+  private buildBatchInternal(history: Message[]): Message[] {
     let result = [...history];
 
     // ---- 阶段 1：执行声明式注入（批量定位，统一插入） ----
@@ -567,6 +584,12 @@ export class PromptBuilder {
     }
 
     return result;
+  }
+
+  private finalizeBuild(messages: Message[], options?: Pick<BuildOptions, "dropEmptyMessages">): Message[] {
+    return options?.dropEmptyMessages === false
+      ? messages
+      : Message.pruneEmpty(messages);
   }
 
   // ========================

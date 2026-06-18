@@ -196,6 +196,49 @@ describe("Agent fake client", () => {
     assert.ok(client.calls[0].options?.signal instanceof AbortSignal);
   });
 
+  it("lets PromptBuilder anchor on an empty root without sending it to the model", async () => {
+    const client = new FakeOpenAIClient().enqueue(textChunks("anchored"));
+    const promptBuilder = new PromptBuilder();
+    promptBuilder.injectSystem(Rule.top().after(), "root anchored context");
+
+    const agent = new Agent({
+      client,
+      model: "fake-model",
+      session: Session.create(),
+      promptBuilder,
+    });
+
+    await agent.run("question");
+
+    assert.deepEqual(agent.session.history().map((msg) => msg.text), [
+      "",
+      "question",
+      "anchored",
+    ]);
+    assert.deepEqual(
+      (client.calls[0].params.messages as Array<{ role: string; content: string }>).map((msg) => msg.content),
+      ["root anchored context", "question"]
+    );
+  });
+
+  it("prunes empty messages from raw model requests", async () => {
+    const client = new FakeOpenAIClient().enqueue(textChunks("raw reply"));
+    const session = Session.create("system");
+    const agent = new Agent({ client, model: "fake-model", session });
+    const messages = [
+      Message.emptySystem(),
+      Message.system(""),
+      Message.user("raw user"),
+    ];
+
+    await agent.runRaw(messages);
+
+    assert.deepEqual(
+      (client.calls[0].params.messages as Array<{ role: string; content: string }>).map((msg) => msg.content),
+      ["raw user"]
+    );
+  });
+
   it("executes approved tool calls and continues until the final answer", async () => {
     const client = new FakeOpenAIClient()
       .enqueue(toolCallChunks("echo", { value: "ping" }))
@@ -221,13 +264,14 @@ describe("Agent fake client", () => {
     assert.equal(reply.text, "tool says ping");
     assert.equal(client.calls.length, 2);
     assert.deepEqual(session.history().map((msg) => msg.role), [
+      Role.System,
       Role.User,
       Role.Assistant,
       Role.Tool,
       Role.Assistant,
     ]);
-    assert.equal(session.history()[1].toolCalls[0].name, "echo");
-    assert.equal(session.history()[2].text, "{\"echoed\":\"ping\"}");
+    assert.equal(session.history()[2].toolCalls[0].name, "echo");
+    assert.equal(session.history()[3].text, "{\"echoed\":\"ping\"}");
     assert.deepEqual(eventTypes(events), [
       StreamEventType.TOOL_CALL_START,
       StreamEventType.TOOL_APPROVAL_REQUIRED,
@@ -507,7 +551,7 @@ describe("Agent fake client", () => {
       () => agent.run("second"),
       AgentAlreadyRunningError
     );
-    assert.deepEqual(session.history().map((msg) => msg.text), ["first"]);
+    assert.deepEqual(session.history().map((msg) => msg.text), ["", "first"]);
 
     release!();
     assert.equal((await firstRun).text, "first reply");
@@ -541,7 +585,7 @@ describe("Agent fake client", () => {
     assert.equal(errors.length, 1);
     assert.equal(agent.lastRunState?.status, "failed");
     assert.equal(agent.lastRunState?.stopReason, "unknown_error");
-    assert.deepEqual(agent.session.history().map((msg) => msg.text), ["parse this"]);
+    assert.deepEqual(agent.session.history().map((msg) => msg.text), ["", "parse this"]);
   });
 
   it("reports rejected promises from async event handlers", async () => {
@@ -630,6 +674,7 @@ describe("Agent fake client", () => {
     await assert.rejects(agent.run("do not commit"), /transform failed/);
 
     assert.deepEqual(session.history().map((message) => message.text), [
+      "",
       "do not commit",
     ]);
     assert.equal(handlerErrors.length, 1);

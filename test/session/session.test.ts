@@ -51,7 +51,8 @@ describe("Session", () => {
 
     assert.equal(session.root.role, Role.System);
     assert.equal(session.root.text, "");
-    assert.deepEqual(session.history(), [user]);
+    assert.deepEqual(session.history(), [session.root, user]);
+    assert.deepEqual(session.history(false), [user]);
   });
 
   it("preserves prebuilt messages added through addMessage", () => {

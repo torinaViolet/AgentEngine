@@ -12,6 +12,13 @@ describe("Message", () => {
     assert.equal(emptyRoot.role, Role.System);
     assert.deepEqual(emptyRoot.parts, []);
     assert.equal(emptyRoot.text, "");
+    assert.equal(emptyRoot.isEmpty, true);
+
+    assert.equal(Message.system("").isEmpty, true);
+    assert.equal(Message.system("system prompt").isEmpty, false);
+    assert.equal(Message.assistantToolCalls([
+      { id: "call_1", name: "tool", arguments: "{}" },
+    ]).isEmpty, false);
   });
 
   it("normalizes string, single part, and part array content", () => {
@@ -184,11 +191,13 @@ describe("Message", () => {
     assert.deepEqual(secondRoot.children, [user]);
   });
 
-  it("omits an empty system root from included history", () => {
+  it("keeps an empty system root in included history", () => {
     const root = Message.emptySystem();
     const user = root.append(Message.user("hello"));
 
-    assert.deepEqual(user.getHistory(), [user]);
+    assert.deepEqual(user.getHistory(), [root, user]);
+    assert.deepEqual(user.getHistory(false), [user]);
+    assert.deepEqual(Message.pruneEmpty(user.getHistory()), [user]);
   });
 
   it("removes nodes by pruning a subtree", () => {

@@ -787,8 +787,9 @@ export class Agent {
     options: Record<string, unknown>,
     run: PreparedRunOptions
   ): Promise<Record<string, unknown>> {
+    const requestMessages = Message.pruneEmpty(messages);
     const serialized = await this.raceWithAbort(
-      this._adapter.serialize(messages, run.serializeOptions),
+      this._adapter.serialize(requestMessages, run.serializeOptions),
       run.signal
     );
     const tools = this._toolkit?.size ? this._toolkit.schemas : undefined;
