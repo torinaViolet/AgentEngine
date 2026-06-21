@@ -1,6 +1,6 @@
 # AgentEngine API 教程
 
-版本：1.2.x
+版本：2.1.x
 
 AgentEngine 是一个 TypeScript AI Agent 框架。它把一次模型调用拆成几个可以单独理解、测试和替换的模块：
 
@@ -389,8 +389,19 @@ if (anchor) {
 ```ts
 session.inserter.moveTo(anchor).insertAfter(msg).execute();
 session.inserter.moveTo(anchor).insertBefore(msg).execute();
-session.inserter.bottom().insertUserAfter("追加一条用户消息").execute();
+
+// 光标移动方法
 session.inserter.top().insertAssistantBefore("插到顶部之前").execute();
+session.inserter.bottom().insertUserAfter("追加一条用户消息").execute();
+session.inserter.move(2); // 偏移移动，正数向后，负数向前
+session.inserter.moveByContent(["关键词"]); // 按内容定位光标
+session.inserter.moveByTags(["important"]); // 按标签定位光标
+
+// 查询当前状态
+session.inserter.current;     // 光标当前指向的消息
+session.inserter.position;    // 光标索引
+session.inserter.isExpired;   // 插入器是否已执行（报废）
+session.inserter.pendingCount;// 排队中的命令数量
 ```
 
 ### Paginator：切换分支
@@ -593,10 +604,12 @@ const results = await toolkit.executeAll(toolCalls);
 ```ts
 await toolkit.execute(toolCall, { errorPolicy: "return_to_model" });
 await toolkit.execute(toolCall, { errorPolicy: "throw" });
+await toolkit.execute(toolCall, { signal: abortController.signal }); // 传入 AbortSignal
 ```
 
-- `return_to_model`：工具异常会转成模型可读的 tool result。
+- `return_to_model`：工具异常会转成模型可读的 tool result（默认）。
 - `throw`：抛出 `ToolExecutionError`。
+- `signal`：传入 `AbortSignal` 供工具内部响应取消。
 
 ### MCP 工具
 
@@ -680,6 +693,8 @@ console.log(done?.message.text);
 - `delta.thinking`：Claude-like thinking 内容
 - `delta.tool_calls`：工具调用增量
 - `usage`：stream usage chunk
+
+`reset()` 可重置解析器内部状态，重用解析器实例。
 
 ### 常用事件
 
@@ -847,7 +862,7 @@ builder.removeWhere((msg) => msg.hasTag("debug"));
 builder.replaceWhere((msg) => msg.hasTag("old"), Message.system("new"));
 builder.filter((msg) => msg.role !== Role.Tool);
 builder.slice(-10);
-builder.map((msg) => msg);
+builder.map((msg, i) => msg);
 builder.transform((messages) => messages.reverse());
 ```
 
@@ -887,6 +902,11 @@ builder.transform((messages) => messages.reverse());
 | `build(history, options?)` | 生成临时上下文，默认移除空消息 |
 | `buildBatch(history, options?)` | batch 构建 |
 | `buildImmediate(history, options?)` | immediate 构建 |
+| `injections` | 只读注入列表 |
+| `aliveCount` / `expiredCount` / `activeCount` | 注入统计 |
+| `findByRule(rule)` / `findById(id)` | 查找注入 |
+| `operations` | 只读操作管线列表 |
+| `removeOperation(label)` | 按标签移除操作 |
 
 ## Config：请求参数
 
@@ -984,7 +1004,7 @@ await agent.run("这一轮更发散一点", { temperature: 1.0 });
 | `frequencyPenalty(n)` / `presencePenalty(n)` | 惩罚参数 |
 | `stop(...seq)` | 停止序列，最多保留 4 个 |
 | `seed(n)` | 随机种子 |
-| `responseFormat(format, schema?)` | 响应格式 |
+| `responseFormat(format, schema?)` | 响应格式：`"text"` / `"json_object"` / `"json_schema"` |
 | `set(key, value)` | 自定义字段 |
 | `unset(key)` | 删除字段 |
 | `merge(other)` | 合并配置 |
@@ -1216,6 +1236,29 @@ await agent.run("继续", {
 - `tool_call`：工具调用相关场景包含。
 - `all`：全部包含。
 
+`include`（可选自定义选择器，优先级高于 `scope`）：
+
+```ts
+serializeOptions: {
+  thinking: {
+    mode: "message",
+    // 只回传包含工具调用的消息的 thinking
+    include: (msg, index) => msg.toolCalls.length > 0,
+  },
+},
+```
+
+`messagePrefix`（可选，`message` 降级模式下的提示前缀，默认带有恢复语义）：
+
+```ts
+serializeOptions: {
+  thinking: {
+    mode: "message",
+    messagePrefix: "[先前上下文]\n",
+  },
+},
+```
+
 DeepSeek / Qwen 等模型如果要求工具调用时回传 reasoning 内容，可以在 `run()` 时显式设置。
 
 ## Media：媒体解析
@@ -1355,6 +1398,11 @@ agent
   .on(StreamEventType.TEXT_DELTA, (event) => {
     process.stdout.write(event.delta);
   })
+  // 批量注册：同一个 handler 响应多个事件类型
+  .on(
+    [StreamEventType.TOOL_CALL_START, StreamEventType.TOOL_CALL_DONE],
+    (event) => console.log("tool event:", event.type, event.name)
+  )
   .on(StreamEventType.TOOL_EXECUTE_START, (event) => {
     console.log("tool start:", event.name);
   })
@@ -1364,6 +1412,14 @@ agent
   .on(StreamEventType.ERROR, (event) => {
     console.error(event.error);
   });
+```
+
+也支持自定义事件类型：
+
+```ts
+agent.on("my_custom_event", (event) => {
+  console.log(event.data);
+});
 ```
 
 事件 handler 抛错默认会打印到 `console.error`，但不会中断 Agent。可以自定义处理器：
@@ -1413,6 +1469,8 @@ agent.setConfig(RequestConfig.precise());
 agent.setRequestOptions({ temperature: 0.1 });
 agent.setPromptBuilder(builder);
 agent.setToolErrorPolicy("pause");
+agent.setToolApproval(customApprovalHandler);
+agent.setToolApprovalMode("manual");
 ```
 
 常用 getter：
@@ -1428,6 +1486,7 @@ agent.lastRunState;
 agent.canResume;
 agent.canContinue;
 agent.isRunning;
+agent.pendingApprovals;
 ```
 
 ### 工具审批
@@ -1554,7 +1613,16 @@ if (agent.canResume) {
 ```ts
 if (agent.canContinue) {
   await agent.continue({
+    // mode: "auto" | "resume" | "continue"
+    // auto=有中断则恢复，否则普通继续；resume=严格恢复；continue=普通继续
+    mode: "auto",
+    // 继续时追加的提示词
     prompt: "请继续上一条回答，不要重复已经说过的内容。",
+    // thinking 回传策略；resume 默认 auto，普通 continue 默认 none
+    thinkingMode: "auto",
+    // 也支持 AgentRunOptions 中的常用字段
+    signal: controller.signal,
+    timeoutMs: 30_000,
   });
 }
 ```
@@ -1578,11 +1646,13 @@ state?.error;       // 错误对象
 | stopReason | 含义 |
 | --- | --- |
 | `final` | 正常完成 |
+| `continue` | 通过 `agent.continue()` 继续 |
 | `abort` | 主动中断 |
 | `timeout` | 超时 |
 | `network_error` | 网络或 API 请求失败 |
 | `stream_error` | 流式解析或读取失败 |
 | `tool_approval_rejected` | 工具审批被拒绝 |
+| `tool_approval_error` | 工具审批函数执行失败 |
 | `tool_execution_error` | 工具执行失败 |
 | `max_tokens` | 模型输出达到 token 限制 |
 | `max_turns` | 工具循环超过最大轮数 |
@@ -1592,15 +1662,17 @@ state?.error;       // 错误对象
 
 | 字段 | 说明 |
 | --- | --- |
-| `client` | OpenAI-compatible 客户端 |
+| `client?` | 模型客户端，`OpenAIClientLike` 或自定义 `ModelClient`，与 `provider` 二选一 |
+| `provider?` | Client + Adapter + Parser 的预设组合，与 `client` 二选一 |
 | `model` | 模型名 |
 | `session` | 会话 |
 | `adapter?` | 消息适配器，默认 `OpenAIAdapter` |
+| `parserFactory?` | 自定义 Parser 工厂，会覆盖 Provider 中的预设 |
 | `toolkit?` | 工具包 |
 | `toolApproval?` | 自定义工具审批函数 |
 | `toolApprovalMode?` | `"auto"` 或 `"manual"` |
-| `toolApprovalTimeoutMs?` | 手动审批超时 |
-| `toolApprovalTimeoutPolicy?` | `"reject"` 或 `"abort"` |
+| `toolApprovalTimeoutMs?` | 手动审批超时（毫秒） |
+| `toolApprovalTimeoutPolicy?` | 手动审批超时策略：`"reject"`（默认）或 `"abort"` |
 | `toolErrorPolicy?` | `"return_to_model"` / `"pause"` / `"throw"` |
 | `maxTurns?` | 最大自动循环轮数，默认 10 |
 | `promptBuilder?` | 提示词构建器 |
