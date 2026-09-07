@@ -9,6 +9,7 @@ import {
   ToolExecutionError,
 } from "../tool/ToolKit";
 import { Session } from "../session/Session";
+import type { AgentSession } from "../session/AgentSession";
 import { StreamParser } from "../stream/StreamParser";
 import type {
   MessageStreamParser,
@@ -31,7 +32,7 @@ import type { Provider } from "../provider";
 export type OpenAIClientLike = import("../client").OpenAIClientLike;
 
 /** Agent 配置 */
-export interface AgentOptions {
+export interface AgentOptions<S extends AgentSession = Session> {
   /** OpenAI 兼容客户端 */
   client?: ModelClient | OpenAIClientLike;
   /** Client + Adapter + Parser preset. */
@@ -55,7 +56,7 @@ export interface AgentOptions {
   /** 工具执行错误策略，默认 return_to_model */
   toolErrorPolicy?: AgentToolErrorPolicy;
   /** 会话 */
-  session: Session;
+  session: S;
   /** 最大循环轮次（防无限循环），默认10*/
   maxTurns?: number;
   /** 提示词构建器 */
@@ -255,13 +256,13 @@ const defaultHandlerErrorHandler: HandlerErrorHandler = (error, event) => {
  *
  *   const reply = await agent.run("北京天气怎么样？");
  */
-export class Agent {
+export class Agent<S extends AgentSession = Session> {
   private _client: ModelClient;
   private _model: string;
   private _adapter: MessageAdapter;
   private _parserFactory: MessageStreamParserFactory;
   private _toolkit?: ToolKit;
-  private _session: Session;
+  private _session: S;
   private _promptBuilder?: PromptBuilder;
   private _maxTurns: number;
   private _config?: RequestConfig;
@@ -277,7 +278,7 @@ export class Agent {
   private _lastRunState?: AgentRunState;
   private _handlerErrorHandler: HandlerErrorHandler = defaultHandlerErrorHandler;
 
-  constructor(options: AgentOptions) {
+  constructor(options: AgentOptions<S>) {
     const client = options.client
       ? toModelClient(options.client)
       : options.provider?.client;
@@ -525,7 +526,7 @@ export class Agent {
   }
 
   /** 获取关联的Session */
-  get session(): Session {
+  get session(): S {
     return this._session;
   }
 
@@ -675,11 +676,14 @@ export class Agent {
     options?: AgentRunOptions
   ): Promise<Message> {
     const run = this.prepareRunOptions(options);
+    let sessionStarted = false;
     this.startRunState();
     let currentParser: MessageStreamParser | undefined;
     let partialAlreadyPersisted = false;
 
     try {
+      this._session.beginGeneration?.();
+      sessionStarted = true;
       const mergedOptions = this.buildMergedOptions(run.requestOptions);
       let lastAssistantMsg: Message | undefined;
 
@@ -770,6 +774,7 @@ export class Agent {
       this.emitError(error);
       throw error;
     } finally {
+      if (sessionStarted) this._session.endGeneration?.();
       run.cleanup();
     }
   }

@@ -432,3 +432,18 @@ npm run build
 ## License
 
 Apache-2.0
+
+## ListSession（候选列表）
+
+ListSession 与树状 Session 并列，Agent 根据传入的会话推断类型。每行维护候选及选中项，一次工具循环的完整消息轨迹属于同一个候选。
+
+```ts
+const session = ListSession.create("system");
+const agent = new Agent({ client, model, session });
+await agent.run("hello");
+session.regenerate(session.rows[1].id);
+await agent.generate();
+session.select(session.rows[1].id, session.rows[1].candidates[0].id);
+```
+
+切换早期候选保留后续行，但 staleRowIds 会标记上下文已变化。继续生成前显式 acceptHistory() 接受保留历史，或 truncateAfter()/regenerate() 处理。候选切换不撤销工具副作用。使用 toJSON()/ListSession.fromJSON() 保存完整选择及轨迹。应用重启后的 Agent 运行现场恢复不由 ListSession 单独保证。

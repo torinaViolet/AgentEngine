@@ -437,6 +437,61 @@ if (paginator) {
 | `systemPrompt` | 读取或设置系统提示 |
 | `toJSON()` / `fromJSON()` | 序列化与恢复 |
 
+### ListSession：候选列表会话
+
+`ListSession` 与树状 `Session` 并列，适合"每条回复可以左右切换候选"的列表式界面。它由若干 **行（row）** 线性组成，每行持有多个 **候选（candidate）**；一次工具循环产生的全部消息（assistant → tool → assistant）属于同一个候选，切换候选时整段轨迹一起切换。
+
+`Agent` 通过 `AgentSession` 接口接受任意会话实现，并从传入的实例推断类型，所以 `agent.session` 仍保留具体类型：
+
+```ts
+import { Agent, ListSession } from "@notic/agent-engine";
+
+const session = ListSession.create("你是一个助手");
+const agent = new Agent({ client, model: "gpt-4o", session });
+
+await agent.run("你好");
+
+// 对第 2 行重新生成一个候选，只用它之前的行作为上下文
+session.regenerate(session.rows[1].id);
+await agent.generate();
+
+// 切回旧候选，后面的行不会被删除
+session.select(session.rows[1].id, session.rows[1].candidates[0].id);
+```
+
+切换靠前的候选不会创建分支、也不会抹掉后面的行，但后续行的上下文已经变了。这些行会出现在 `staleRowIds` 中，此时继续生成会抛错，需要显式选择处理方式：
+
+| 处理方式 | 含义 |
+| --- | --- |
+| `acceptHistory()` | 承认保留下来的后续内容，按新上下文继续 |
+| `truncateAfter(rowId)` | 丢弃该行之后的所有行 |
+| `regenerate(rowId)` | 在该行重新生成，只使用它之前的行 |
+
+`toJSON()` / `ListSession.fromJSON()` 会完整保存所有候选、轨迹和当前选择，恢复时对 id 唯一性、角色一致性和选中项做严格校验。
+
+> 注意：候选切换只影响会话内容，**不会撤销工具已经产生的副作用**；应用重启后的 Agent 运行现场恢复也不由 `ListSession` 单独负责。
+
+### ListSession API 摘要
+
+| API | 说明 |
+| --- | --- |
+| `ListSession.create(systemPrompt?)` | 创建候选列表会话 |
+| `rows` | 只读行列表，每行含候选与当前选中项 |
+| `alternatives` | 二维投影，每行候选的最终消息 |
+| `history(includeRoot?)` | 当前选择下的完整历史 |
+| `addUser/addAssistant/addTool/addMessage` | 追加消息，与 `Session` 一致 |
+| `addCandidate(rowId, message)` | 手动为某行添加候选 |
+| `removeCandidate(rowId, candidateId)` | 删除候选（不可删到空行） |
+| `select(rowId, candidateId)` | 切换某行的选中候选 |
+| `regenerate(rowId)` | 标记下一次 `generate()` 在该行生成新候选 |
+| `cancelRegeneration()` | 取消上面的标记 |
+| `truncateAfter(rowId \| null)` | 截断该行之后的内容 |
+| `staleRowIds` | 上下文已失效的行 |
+| `acceptHistory()` | 接受保留的后续历史 |
+| `beginGeneration()` / `endGeneration()` | 生成边界，由 `Agent` 自动调用 |
+| `clear()` | 清空所有行 |
+| `toJSON()` / `ListSession.fromJSON()` | 序列化与恢复 |
+
 ## Tool：工具系统
 
 工具让模型可以调用你的 TypeScript 函数。AgentEngine 的工具系统包含四层：

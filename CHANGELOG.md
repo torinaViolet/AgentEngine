@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.2.0 - 2026-09-07
+
+### Added
+
+- `ListSession`: a linear alternative-list conversation model alongside the tree-based `Session`. Each row holds multiple candidates, and one tool loop's full message trace belongs to a single candidate.
+- `AgentSession` interface describing the conversation operations `Agent` needs, so custom session models can drive the Agent loop.
+- Optional `beginGeneration()` / `endGeneration()` session lifecycle hooks, called by `Agent` around a run so a session can group a whole tool loop into one candidate.
+- `ListSession` selection and history APIs: `select()`, `addCandidate()`, `removeCandidate()`, `regenerate()`, `cancelRegeneration()`, `truncateAfter()`, `acceptHistory()`, plus `rows`, `alternatives` and `staleRowIds`.
+- `ListSession.toJSON()` / `ListSession.fromJSON()` preserving every candidate, trace and selection, with strict validation on restore.
+
+### Changed
+
+- `Agent` is now generic over its session type (`Agent<S extends AgentSession = Session>`); `agent.session` keeps the concrete type that was passed in.
+
+### Compatibility
+
+- Fully backward compatible. `Agent` defaults to `Session`, so existing code keeps tree-specific APIs such as `agent.session.root` without changes.
+
 ## 2.1.0 - 2026-06-19
 
 ### Added
