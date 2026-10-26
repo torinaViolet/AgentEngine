@@ -1,222 +1,211 @@
-import { Message } from "../message/Message";
-import { MessagePart } from "../message/MessagePart";
-import { Role } from "../message/Role";
-import { generateId } from "../utils";
-import { AgentSession } from "./AgentSession";
-
-export interface ListCandidate {
-  id: string;
-  /** A plain reply has one message; tool replies retain the entire execution trace. */
-  messages: Message[];
-  messageIds: string[];
-  context: string;
-}
-export interface ListRow {
-  id: string;
-  selectedCandidateId: string;
-  candidates: ListCandidate[];
-}
-function messageData(message: Message): Record<string, unknown> {
-  return JSON.parse(JSON.stringify({role: message.role, parts: message.parts,
-    metadata: message.metadata, tags: [...message.tags], model: message.model,
-    usage: message.usage?.toJSON()}));
-}
-// Compact deterministic prefix fingerprint; stores no duplicate history or attachments.
-function fingerprint(text: string): string {
-  let a=2166136261, b=0x9e3779b9;
-  for(let i=0;i<text.length;i++){const c=text.charCodeAt(i);a=Math.imul(a^c,16777619);b=Math.imul(b^c,2246822519);}
-  return (a>>>0).toString(16).padStart(8,'0')+(b>>>0).toString(16).padStart(8,'0');
-}
-function readMessage(value: unknown): Message {
-  if (!value || typeof value !== 'object') throw new Error('Invalid message');
-  const data = value as Record<string, unknown>;
-  if (!Object.values(Role).includes(data.role as Role) || !Array.isArray(data.parts) || data.children)
-    throw new Error('Invalid list message');
-  return Message.fromJSON(JSON.parse(JSON.stringify(data)));
-}
-
-/** Linear rows of alternatives. Changing a selection never creates a tree or erases later rows. */
-export class ListSession implements AgentSession {
-  readonly id: string;
-  readonly createdAt: Date;
-  title?: string;
-  private readonly system: Message;
-  private items: ListRow[] = [];
-  private generating = false;
-  private target: number | null = null;
-  private active: ListCandidate | null = null;
-  private pendingTarget: number | null = null;
-
-  private constructor(system: Message, id = generateId(), createdAt = new Date()) {
-    this.system = system; this.id = id; this.createdAt = createdAt;
-  }
-  static create(systemPrompt = ''): ListSession {
-    return new ListSession(Message.system(systemPrompt));
-  }
-  get rows(): readonly ListRow[] { return this.items; }
-  /** Convenient two-dimensional projection; tool candidates expose their final message here. */
-  get alternatives(): Message[][] {
-    return this.items.map(row => row.candidates.map(candidate => candidate.messages.at(-1)!));
-  }
-  get cursor(): Message { return this.history().at(-1)!; }
-  get messages(): Message[] { return this.history(); }
-  get systemPrompt(): string { return this.system.text; }
-  set systemPrompt(value: string) {
-    this.assertIdle(); this.system.parts.splice(0, this.system.parts.length, {type:'text', text:value});
-    this.system.invalidateCache();
-  }
-  private selected(row: ListRow): ListCandidate {
-    const result = row.candidates.find(candidate => candidate.id === row.selectedCandidateId);
-    if (!result) throw new Error('Invalid selected candidate');
-    return result;
-  }
-  private keys(end = this.items.length): string[] {
-    let key = fingerprint(JSON.stringify(messageData(this.system)));
-    const keys = [key];
-    for (const row of this.items.slice(0,end)) {
-      const candidate=this.selected(row);
-      key=fingerprint(JSON.stringify([key,row.id,candidate.id,candidate.messages.map(messageData)]));
-      keys.push(key);
+import { assert, copy, id, immutable } from "../core/data";
+import { Message, Role } from "../message";
+import type { SessionData, ListSessionData, AgentSessionData, ContinuationCommitOptions } from "./types";
+import type { ListCandidate, ListRow, ListStructure } from "./structures";
+import { BaseSession } from './BaseSession';
+export class ListSession extends BaseSession {
+    readonly type: "list" | "agent" = "list";
+    readonly candidateUnit: "sequence" | "turn";
+    protected items: ListRow[] = [];
+    private generating?: ListCandidate;
+    private regeneration: number | null = null;
+    private generationEnd?: number;
+    constructor(options: {
+        systemPrompt?: string;
+        candidateUnit?: "sequence" | "turn";
+        id?: string;
+    } = {}) {
+        super(options.systemPrompt, options.id);
+        this.candidateUnit = options.candidateUnit ?? "sequence";
+        assert(["sequence", "turn"].includes(this.candidateUnit), "Invalid candidate unit");
     }
-    return keys;
-  }
-  private key(end: number): string { return this.keys(end)[end]; }
-  get staleRowIds(): string[] {
-    const keys=this.keys();
-    return this.items.filter((row,index)=>this.selected(row).context!==keys[index]).map(row=>row.id);
-  }
-  /** Explicit acceptance of retained downstream content after changing an earlier alternative. */
-  acceptHistory(): void {
-    this.assertIdle();
-    const keys=this.keys();
-    for (let i=0;i<this.items.length;i++) this.selected(this.items[i]).context = keys[i];
-  }
-  private assertIdle(): void { if (this.generating) throw new Error('Session is generating'); }
-  private rowIndex(id: string): number {
-    const index = this.items.findIndex(row => row.id === id);
-    if (index < 0) throw new Error('Unknown row');
-    return index;
-  }
-  history(includeRoot = true): Message[] {
-    const end = this.generating ? this.target : this.pendingTarget;
-    const rows = end === null ? this.items : this.items.slice(0,end);
-    const messages = rows.flatMap(row => this.selected(row).messages);
-    if (this.generating && this.active) messages.push(...this.active.messages);
-    return includeRoot ? [this.system, ...messages] : messages;
-  }
-  select(rowId: string, candidateId: string): void {
-    this.assertIdle(); this.pendingTarget = null;
-    const row = this.items[this.rowIndex(rowId)];
-    if (!row.candidates.some(candidate => candidate.id === candidateId)) throw new Error('Unknown candidate');
-    row.selectedCandidateId = candidateId;
-  }
-  /** Next Agent.generate() creates an alternative here, using only preceding rows as context. */
-  regenerate(rowId: string): void {
-    this.assertIdle();
-    const index = this.rowIndex(rowId);
-    if (this.selected(this.items[index]).messages[0].role !== Role.Assistant)
-      throw new Error('Only assistant rows can be regenerated');
-    this.pendingTarget = index;
-  }
-  cancelRegeneration(): void { this.assertIdle(); this.pendingTarget = null; }
-  truncateAfter(rowId: string | null): void {
-    this.assertIdle(); this.pendingTarget = null;
-    this.items.splice(rowId === null ? 0 : this.rowIndex(rowId)+1);
-  }
-  removeCandidate(rowId: string, candidateId: string): void {
-    this.assertIdle(); this.pendingTarget = null;
-    const row = this.items[this.rowIndex(rowId)];
-    const index = row.candidates.findIndex(candidate => candidate.id === candidateId);
-    if (index < 0 || row.candidates.length === 1) throw new Error('Cannot remove candidate');
-    row.candidates.splice(index,1);
-    if (row.selectedCandidateId === candidateId) row.selectedCandidateId = row.candidates[Math.min(index,row.candidates.length-1)].id;
-  }
-  addCandidate(rowId: string, message: Message | Message[]): ListCandidate {
-    this.assertIdle(); this.pendingTarget = null;
-    const index = this.rowIndex(rowId);
-    const messages = Array.isArray(message) ? message : [message];
-    if (!messages.length) throw new Error('Empty candidate');
-    if (messages[0].role !== this.selected(this.items[index]).messages[0].role) throw new Error('Candidate role mismatch');
-    const candidate = this.makeCandidate(messages,index);
-    this.items[index].candidates.push(candidate);
-    this.items[index].selectedCandidateId = candidate.id;
-    return candidate;
-  }
-  private makeCandidate(messages: Message[], index: number): ListCandidate {
-    // Do not mutate parent/children on messages belonging to an existing tree.
-    const copies = messages.map(message => readMessage(messageData(message)));
-    return {id:generateId(),messages:copies,messageIds:copies.map(()=>generateId()),context:this.key(index)};
-  }
-  addUser(content: string | MessagePart | MessagePart[]): Message { return this.addMessage(Message.user(content)); }
-  addMessage(message: Message): Message {
-    this.assertIdle();
-    if (this.pendingTarget !== null) throw new Error('Regeneration requires generate(), not run()');
-    if (this.staleRowIds.length) throw new Error('History changed: regenerate, truncate, or explicitly acceptHistory()');
-    const candidate = this.makeCandidate([message],this.items.length);
-    this.items.push({id:generateId(),selectedCandidateId:candidate.id,candidates:[candidate]});
-    return candidate.messages[0];
-  }
-  addAssistant(message: Message): Message {
-    if (!this.generating) return this.addMessage(message);
-    this.appendGenerated(message); return message;
-  }
-  addTool(messages: Message[]): void {
-    if (!this.generating) throw new Error('Tool results require a generation');
-    for (const message of messages) this.appendGenerated(message);
-  }
-  private appendGenerated(message: Message): void {
-    const index = this.target!;
-    if (!this.active) {
-      this.active = {id:generateId(),messages:[],messageIds:[],context:this.key(index)};
-      if (index === this.items.length) this.items.push({id:generateId(),selectedCandidateId:this.active.id,candidates:[]});
-      this.items[index].candidates.push(this.active);
-      this.items[index].selectedCandidateId = this.active.id;
+    static create(options: {
+        systemPrompt?: string;
+        candidateUnit?: "sequence" | "turn";
+    } = {}): ListSession {
+        return new ListSession(options);
     }
-    // Agent owns generated messages; retain their identity for partial/commit hooks, without linking trees.
-    this.active.messages.push(message); this.active.messageIds.push(generateId());
-  }
-  beginGeneration(): void {
-    this.assertIdle();
-    const target = this.pendingTarget ?? this.items.length;
-    if (this.staleRowIds.some(id => this.rowIndex(id)<target)) {
-      this.pendingTarget=null;
-      throw new Error('History changed: explicitly accept or regenerate earlier rows first');
+    get rows(): readonly ListRow[] {
+        return immutable(copy(this.items));
     }
-    this.target=target; this.pendingTarget=null; this.active=null; this.generating=true;
-  }
-  endGeneration(): void { this.generating=false; this.target=null; this.active=null; }
-  clear(): void { this.assertIdle(); this.items=[]; this.pendingTarget=null; this.systemPrompt=''; }
-  toJSON(): Record<string,unknown> {
-    return {format:'agent-engine-list-session',version:1,id:this.id,title:this.title,createdAt:this.createdAt.toISOString(),
-      system:messageData(this.system), rows:this.items.map(row=>({...row,candidates:row.candidates.map(candidate=>({
-        ...candidate,messages:candidate.messages.map(messageData)}))}))};
-  }
-  static fromJSON(value: Record<string,unknown>): ListSession {
-    if (value.format !== 'agent-engine-list-session' || value.version !== 1 || !Array.isArray(value.rows))
-      throw new Error('Unsupported ListSession format');
-    const ids = new Set<string>();
-    const id = (value:unknown):string => {
-      if(typeof value!=='string'||!value||ids.has(value)) throw new Error('Invalid or duplicate identity');
-      ids.add(value);return value;
-    };
-    const date = new Date(value.createdAt as string);
-    if(!Number.isFinite(date.getTime())) throw new Error('Invalid creation date');
-    const session = new ListSession(readMessage(value.system),id(value.id),date);
-    if(session.system.role!==Role.System) throw new Error('Invalid system message');
-    session.title = typeof value.title==='string' ? value.title : undefined;
-    session.items = value.rows.map((row:any)=>{
-      if(!row||!Array.isArray(row.candidates)||!row.candidates.length) throw new Error('Empty row');
-      const rowId=id(row.id);
-      const candidates:ListCandidate[]=row.candidates.map((candidate:any)=>{
-        if(!candidate||!Array.isArray(candidate.messages)||!candidate.messages.length||
-          !Array.isArray(candidate.messageIds)||candidate.messageIds.length!==candidate.messages.length||typeof candidate.context!=='string')
-          throw new Error('Invalid candidate');
-        return {id:id(candidate.id),messages:candidate.messages.map(readMessage),messageIds:candidate.messageIds.map(id),context:candidate.context};
-      });
-      if(!candidates.some(candidate=>candidate.id===row.selectedCandidateId)) throw new Error('Invalid selection');
-      if(candidates.some(candidate=>candidate.messages[0].role!==candidates[0].messages[0].role)) throw new Error('Candidate role mismatch');
-      return {id:rowId,selectedCandidateId:row.selectedCandidateId,candidates};
-    });
-    return session;
-  }
+    private selected(row: ListRow): ListCandidate {
+        return row.candidates.find(c => c.id === row.selectedCandidateId)!;
+    }
+    private prefix(end: number): string {
+        const source = JSON.stringify([this.system.id, this.system.requestRevision, ...this.items.slice(0, end).map(row => [row.id, this.selected(row).id, this.selected(row).messageIds.map(key => [key, this.getMessage(key)!.requestRevision])])]);
+        let hash = 2166136261;
+        let second = 2246822519;
+        for (let i = 0; i < source.length; i++) {
+            hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+            second = Math.imul(second ^ source.charCodeAt(i), 3266489917);
+        }
+        return `${(hash >>> 0).toString(16)}:${(second >>> 0).toString(16)}`;
+    }
+    get staleRowIds(): string[] {
+        return this.items.filter((row, index) => this.selected(row).context !== this.prefix(index)).map(row => row.id);
+    }
+    history(): Message[] {
+        const end = this.regeneration ?? this.generationEnd ?? this.items.length;
+        const messages = this.items.slice(0, end).flatMap(row => this.selected(row).messageIds.map(key => this.messages.get(key)!));
+        if (this.regeneration !== null && this.candidateUnit === "turn")
+            messages.push(...this.selected(this.items[this.regeneration]).messageIds.map(key => this.messages.get(key)!).filter(m => m.role === Role.User));
+        return [this.system, ...messages];
+    }
+    protected append(message: Message): Message {
+        this.register(message);
+        let candidate = this.generating;
+        if (!candidate && this.regeneration === null && this.candidateUnit === "turn" && message.role !== Role.User && this.items.length)
+            candidate = this.selected(this.items[this.items.length - 1]);
+        if (!candidate) {
+            const index = this.regeneration ?? this.items.length;
+            const inputs = this.regeneration !== null && this.candidateUnit === "turn" ? this.selected(this.items[index]).messageIds.filter(key => this.getMessage(key)!.role === Role.User) : [];
+            candidate = { id: id("candidate"), messageIds: [...inputs], turnId: this.turnId, context: this.prefix(index) };
+            if (index === this.items.length)
+                this.items.push({ id: id("row"), selectedCandidateId: candidate.id, candidates: [candidate] });
+            else {
+                this.items[index].candidates.push(candidate);
+                this.items[index].selectedCandidateId = candidate.id;
+            }
+            if (this.regeneration !== null)
+                this.generationEnd = index + 1;
+            this.regeneration = null;
+        }
+        candidate.messageIds.push(message.id);
+        this.structureVersion++;
+        return message;
+    }
+    addMessage(message: Message): Message {
+        assert(this.regeneration === null, "Use Agent.run for regeneration");
+        this.input(message);
+        return this.append(message);
+    }
+    beginGeneration(): void {
+        const end = this.regeneration ?? this.items.length;
+        const stale = new Set(this.staleRowIds);
+        assert(!this.items.slice(0, end).some(row => stale.has(row.id)), "History is stale: accept, truncate or regenerate it first");
+        super.beginGeneration();
+        if (this.candidateUnit === "turn" && this.regeneration === null && this.items.length)
+            this.generating = this.selected(this.items[this.items.length - 1]);
+    }
+    appendGenerated(message: Message): Message {
+        const result = super.appendGenerated(message);
+        if (!this.generating)
+            this.generating = this.items.flatMap(row => row.candidates).find(candidate => candidate.messageIds.includes(message.id));
+        return result;
+    }
+    appendContinuation(targetId: string, generated: Message, options?: ContinuationCommitOptions): Message {
+        this.assertGenerationUnchanged();
+        const candidate = this.items.flatMap(row => row.candidates).find(item => item.messageIds.includes(targetId));
+        assert(candidate, "Unknown continuation candidate");
+        this.generating = candidate;
+        return super.appendContinuation(targetId, generated, options);
+    }
+    endGeneration(): void {
+        super.endGeneration();
+        this.generating = undefined;
+        this.regeneration = null;
+        this.generationEnd = undefined;
+    }
+    select(rowId: string, candidateId: string): void {
+        const row = this.items.find(r => r.id === rowId);
+        assert(row && row.candidates.some(c => c.id === candidateId), "Unknown candidate");
+        row.selectedCandidateId = candidateId;
+        this.structureVersion++;
+        this.refreshTurn();
+    }
+    addCandidate(rowId: string, messages: readonly Message[]): string {
+        const index = this.items.findIndex(r => r.id === rowId);
+        assert(index >= 0 && messages.length, "Invalid candidate");
+        for (const message of messages)
+            this.register(message);
+        const candidate = { id: id("candidate"), messageIds: messages.map(m => m.id), turnId: this.turnId, context: this.prefix(index) };
+        this.items[index].candidates.push(candidate);
+        this.items[index].selectedCandidateId = candidate.id;
+        this.structureVersion++;
+        return candidate.id;
+    }
+    regenerate(rowId: string): void {
+        const index = this.items.findIndex(r => r.id === rowId);
+        assert(index >= 0, "Unknown row");
+        this.regeneration = index;
+        this.structureVersion++;
+        this.turnId = this.selected(this.items[index]).turnId;
+    }
+    cancelRegeneration(): void {
+        this.regeneration = null;
+        this.structureVersion++;
+        this.refreshTurn();
+    }
+    private pruneUnused(): void {
+        const retained = new Set([this.system.id, ...this.items.flatMap(row => row.candidates.flatMap(candidate => candidate.messageIds))]);
+        for (const key of this.messages.keys())
+            if (!retained.has(key))
+                this.unregister(key);
+    }
+    removeCandidate(rowId: string, candidateId: string): void {
+        const row = this.items.find(row => row.id === rowId);
+        assert(row, "Unknown row");
+        const index = row.candidates.findIndex(candidate => candidate.id === candidateId);
+        assert(index >= 0 && row.candidates.length > 1, "Use removeRow to remove a row's only candidate");
+        row.candidates.splice(index, 1);
+        if (row.selectedCandidateId === candidateId)
+            row.selectedCandidateId = row.candidates[Math.min(index, row.candidates.length - 1)].id;
+        this.pruneUnused();
+        this.structureVersion++;
+        this.refreshTurn();
+    }
+    removeRow(rowId: string): void {
+        const index = this.items.findIndex(row => row.id === rowId);
+        assert(index >= 0, "Unknown row");
+        this.items.splice(index, 1);
+        this.regeneration = null;
+        this.pruneUnused();
+        this.structureVersion++;
+        this.refreshTurn();
+    }
+    acceptHistory(): void {
+        for (let i = 0; i < this.items.length; i++)
+            this.selected(this.items[i]).context = this.prefix(i);
+        this.structureVersion++;
+    }
+    truncateAfter(rowId: string | null): void {
+        const index = rowId === null ? -1 : this.items.findIndex(r => r.id === rowId);
+        assert(rowId === null || index >= 0, "Unknown row");
+        this.items.splice(index + 1);
+        const retained = new Set([this.system.id, ...this.items.flatMap(r => r.candidates.flatMap(c => c.messageIds))]);
+        for (const key of this.messages.keys())
+            if (!retained.has(key))
+                this.unregister(key);
+        this.structureVersion++;
+        this.refreshTurn();
+    }
+    protected structure(): ListStructure {
+        return { candidateUnit: this.candidateUnit, rows: this.items };
+    }
+    toJSON(): ListSessionData | AgentSessionData { return super.toJSON() as ListSessionData | AgentSessionData; }
+    protected load(data: SessionData): void {
+        this.restore(data);
+        const structure = data.structure as ListStructure;
+        assert(Array.isArray(structure.rows) && structure.candidateUnit === this.candidateUnit, "Invalid list structure");
+        const identifiers = new Set<string>();
+        for (const row of structure.rows) {
+            assert(typeof row.id === "string" && row.id && !identifiers.has(row.id) && Array.isArray(row.candidates) && row.candidates.length, "Invalid row");
+            identifiers.add(row.id);
+            for (const candidate of row.candidates) {
+                assert(typeof candidate.id === "string" && candidate.id && !identifiers.has(candidate.id) && Array.isArray(candidate.messageIds) && candidate.messageIds.length && new Set(candidate.messageIds).size === candidate.messageIds.length && candidate.messageIds.every(key => this.messages.has(key) && key !== this.system.id) && typeof candidate.context === "string", "Invalid candidate");
+                identifiers.add(candidate.id);
+            }
+            assert(row.candidates.some(c => c.id === row.selectedCandidateId), "Unknown selected candidate");
+        }
+        this.items = copy(structure.rows);
+        this.refreshTurn();
+    }
+    static fromJSON(data: SessionData): ListSession {
+        const structure = data.structure as {
+            candidateUnit: "sequence" | "turn";
+        };
+        const session = new ListSession({ id: data.id, candidateUnit: structure?.candidateUnit });
+        session.load(data);
+        return session;
+    }
 }

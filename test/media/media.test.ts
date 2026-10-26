@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BrowserMediaResolver, DefaultMediaResolver } from "../../src/media";
+import { BrowserMediaResolver, DefaultMediaResolver } from "../../src/legacy/media";
 
 const originalFetch = globalThis.fetch;
 

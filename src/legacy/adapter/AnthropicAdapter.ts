@@ -138,8 +138,8 @@ export class AnthropicAdapter implements MessageAdapter {
               type: "thinking",
               thinking: part.text,
               // signature 从 metadata 获取（多轮对话延续需要）
-              ...(msg.metadata.thinkingSignature
-                ? { signature: msg.metadata.thinkingSignature as string }
+              ...(part.metadata?.thinkingSignature ?? msg.metadata.thinkingSignature
+                ? { signature: (part.metadata?.thinkingSignature ?? msg.metadata.thinkingSignature) as string }
                 : {}),
             });
           } else if (thinkingMode === "message") {
@@ -273,7 +273,7 @@ export class AnthropicAdapter implements MessageAdapter {
 
     // 文本文件直接嵌入
     if (mime.startsWith("text/") || mime === "application/json") {
-      const text = Buffer.from(resolved.base64, "base64").toString("utf-8");
+      const text = new TextDecoder().decode(Uint8Array.from(atob(resolved.base64), char => char.charCodeAt(0)));
       const label = part.fileName || "file";
       return {
         type: "text",

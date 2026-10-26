@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Message, Role, Usage } from "../../src/message";
-import { MatchMode, Priority, Session } from "../../src/session";
+import { Message, Role, Usage } from "../../src/legacy/message";
+import { MatchMode, Priority, Session } from "../../src/legacy/session";
 
 function createBranchedSession(): {
   session: Session;

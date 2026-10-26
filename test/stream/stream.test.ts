@@ -1,13 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Role } from "../../src/message";
+import { Role } from "../../src/legacy/message";
 import {
   StreamEventType,
   StreamParser,
   type MessageDoneEvent,
   type StreamEvent,
   type ToolCallDoneEvent,
-} from "../../src/stream";
+} from "../../src/legacy/stream";
 
 function chunk(delta: Record<string, unknown>, finishReason?: string): Record<string, unknown> {
   return {

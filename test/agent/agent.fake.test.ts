@@ -7,13 +7,13 @@ import {
   AgentToolApprovalError,
   AgentToolApprovalTimeoutError,
   OpenAIClientLike,
-} from "../../src/agent";
-import { RequestConfig } from "../../src/config";
-import { Message, Role } from "../../src/message";
-import { PromptBuilder, Rule } from "../../src/prompt";
-import { Session } from "../../src/session";
-import { StreamEventType } from "../../src/stream";
-import { Param, Tool, ToolKit } from "../../src/tool";
+} from "../../src/legacy/agent";
+import { RequestConfig } from "../../src/legacy/config";
+import { Message, Role } from "../../src/legacy/message";
+import { PromptBuilder, Rule } from "../../src/legacy/prompt";
+import { Session } from "../../src/legacy/session";
+import { StreamEventType } from "../../src/legacy/stream";
+import { Param, Tool, ToolKit } from "../../src/legacy/tool";
 
 type StreamChunk = Record<string, unknown>;
 type StreamFactory = (

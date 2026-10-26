@@ -1,6 +1,6 @@
 {
   "name": "@notic/agent-engine",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "A lightweight, elegant, and feature-complete TypeScript AI Agent framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,21 +9,41 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./adapter": {
-      "types": "./dist/adapter/index.d.ts",
-      "default": "./dist/adapter/index.js"
-    },
-    "./client": {
-      "types": "./dist/client/index.d.ts",
-      "default": "./dist/client/index.js"
-    },
     "./provider": {
       "types": "./dist/provider/index.d.ts",
       "default": "./dist/provider/index.js"
     },
-    "./stream": {
-      "types": "./dist/stream/index.d.ts",
-      "default": "./dist/stream/index.js"
+    "./generator": {
+      "types": "./dist/generator/index.d.ts",
+      "default": "./dist/generator/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./message": {
+      "types": "./dist/message/index.d.ts",
+      "default": "./dist/message/index.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "default": "./dist/session/index.js"
+    },
+    "./tool": {
+      "types": "./dist/tool/index.d.ts",
+      "default": "./dist/tool/index.js"
+    },
+    "./prompt": {
+      "types": "./dist/prompt/index.d.ts",
+      "default": "./dist/prompt/index.js"
+    },
+    "./legacy": {
+      "types": "./dist/legacy/index.d.ts",
+      "default": "./dist/legacy/index.js"
+    },
+    "./legacy/*": {
+      "types": "./dist/legacy/*/index.d.ts",
+      "default": "./dist/legacy/*/index.js"
     },
     "./node": {
       "types": "./dist/node.d.ts",
@@ -42,7 +62,7 @@
     "build": "tsc",
     "clean": "rimraf dist",
     "test": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/**/*.test.js && npm run test:browser && npm run test:exports",
-    "test:browser": "rimraf .browser-dist && esbuild ./test/browser-smoke.ts --bundle --platform=browser --format=esm --outfile=./.browser-dist/index.js",
+    "test:browser": "rimraf .browser-dist && esbuild ./test/browser-smoke.ts --bundle --platform=browser --format=esm --outfile=./.browser-dist/index.js && node test/browser-runtime.cjs",
     "test:exports": "npm run clean && npm run build && node test/package-exports.cjs",
     "test:real:deepseek": "rimraf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/test/agent/agent.real.test.js",
     "prepublishOnly": "npm test && npm run clean && npm run build"
@@ -73,18 +93,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {},
-  "peerDependencies": {
-    "@modelcontextprotocol/sdk": ">=1.0.0",
-    "openai": ">=4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@modelcontextprotocol/sdk": {
-      "optional": true
-    },
-    "openai": {
-      "optional": true
-    }
+  "dependencies": {
+    "ajv": "^8.18.0",
+    "ajv-formats": "^3.0.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -7,7 +7,7 @@ import {
   RequestConfig, StreamEventType,
   ThinkingDeltaEvent, ThinkingDoneEvent,
   TextDeltaEvent, ToolCallStartEvent, ToolCallDoneEvent,
-} from "../../src";
+} from "../../src/legacy";
 import {
   Battle, MONSTERS, MonsterTemplate, MoveResult, BattleSnapshot,
 } from "./game";

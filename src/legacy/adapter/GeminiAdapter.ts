@@ -158,8 +158,8 @@ export class GeminiAdapter implements MessageAdapter {
             parts.push({
               text: part.text,
               thought: true,
-              ...(msg.metadata.geminiThinkingSignature
-                ? { thoughtSignature: msg.metadata.geminiThinkingSignature }
+              ...(part.metadata?.geminiThinkingSignature ?? msg.metadata.geminiThinkingSignature
+                ? { thoughtSignature: part.metadata?.geminiThinkingSignature ?? msg.metadata.geminiThinkingSignature }
                 : {}),
             });
           } else if (thinkingMode === "message") {
@@ -278,7 +278,7 @@ export class GeminiAdapter implements MessageAdapter {
 
     // 文本文件直接嵌入
     if (mime.startsWith("text/") || mime === "application/json") {
-      const text = Buffer.from(resolved.base64, "base64").toString("utf-8");
+      const text = new TextDecoder().decode(Uint8Array.from(atob(resolved.base64), char => char.charCodeAt(0)));
       const label = part.fileName || "file";
       return { text: `[File: ${label}]\n${text}` };
     }

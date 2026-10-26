@@ -231,7 +231,7 @@ export class OpenAIAdapter implements MessageAdapter {
 
     // 文本文件：直接嵌入内容
     if (mime.startsWith("text/") || mime === "application/json") {
-      const text = Buffer.from(resolved.base64, "base64").toString("utf-8");
+      const text = new TextDecoder().decode(Uint8Array.from(atob(resolved.base64), char => char.charCodeAt(0)));
       return {
         type: "text",
         text: `[File: ${label}]\n${text}`,

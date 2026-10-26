@@ -1,1825 +1,248 @@
-# AgentEngine API 教程
+# AgentEngine 3.0 API
 
-版本：2.1.x
+本文对应当前运行时代码。根入口及 /agent、/message、/session、/prompt、/provider、/generator、/tool 子入口提供新 API。历史方案保留在设计记录；迁移见 [MIGRATION-3.0.md](./MIGRATION-3.0.md)。
 
-AgentEngine 是一个 TypeScript AI Agent 框架。它把一次模型调用拆成几个可以单独理解、测试和替换的模块：
-
-- `Message`：统一的消息对象，支持文本、多模态、工具调用、思考内容和树形会话。
-- `Session`：会话树，负责历史、分支、回退、查询和插入。
-- `Tool`：工具定义、参数 schema、生命周期 Hook 和执行结果回传。
-- `Stream`：把 OpenAI-compatible stream chunk 解析成结构化事件。
-- `Prompt`：用声明式规则把临时提示词注入历史。
-- `Config`：链式构建请求参数。
-- `Client`：只负责发送已经适配好的请求，返回 stream 或完整响应。
-- `Adapter`：把统一消息模型序列化到 OpenAI / Anthropic / Gemini 等平台格式。
-- `Provider`：以低耦合方式组合 Client、Adapter 和 Parser。
-- `Agent`：把上面所有模块串起来，完成“请求 -> 解析 -> 工具执行 -> 再请求 -> 最终回复”的自动循环。
-
-这份文档会像教程一样讲 API：先跑起来，再分模块深入。README 只做项目介绍和快速入口，完整用法以后主要看这里。
-
-## 目录
-
-- [安装与最小示例](#安装与最小示例)
-- [核心心智模型](#核心心智模型)
-- [Message：统一消息模型](#message统一消息模型)
-- [Session：会话树](#session会话树)
-- [Tool：工具系统](#tool工具系统)
-- [Stream：流式事件](#stream流式事件)
-- [Prompt：提示词构建](#prompt提示词构建)
-- [Config：请求参数](#config请求参数)
-- [Provider：平台能力组合](#provider平台能力组合)
-- [Adapter：平台适配](#adapter平台适配)
-- [Media：媒体解析](#media媒体解析)
-- [Agent：智能体编排](#agent智能体编排)
-- [Utils：工具函数](#utils工具函数)
-- [常见组合方案](#常见组合方案)
-
-## 安装与最小示例
-
-安装 AgentEngine：
-
-```bash
-npm install @notic/agent-engine
-```
-
-AgentEngine 不强绑定具体模型 SDK。你使用 OpenAI、DeepSeek、Qwen、Kimi 等 OpenAI-compatible 平台时，通常安装 `openai`：
-
-```bash
-npm install openai
-```
-
-使用原生 Anthropic 或 Gemini Provider 时，安装对应官方 SDK：
-
-```bash
-npm install @anthropic-ai/sdk
-npm install @google/genai
-```
-
-最小可运行示例：
+## Message：独立可编辑内容
 
 ```ts
-import OpenAI from "openai";
-import { Agent, Session, StreamEventType } from "@notic/agent-engine";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: "https://api.openai.com/v1",
-});
-
-const agent = new Agent({
-  client,
-  model: "gpt-4o-mini",
-  session: Session.create("你是一个简洁、可靠的助手。"),
-});
-
-agent.on(StreamEventType.TEXT_DELTA, (event) => {
-  process.stdout.write(event.delta);
-});
-
-const reply = await agent.run("用一句话介绍 AgentEngine。");
-console.log("\n\nfinal:", reply.text);
+import { Message, Role } from "@notic/agent-engine";
+const message = Message.assistant("第一段");
+message.appendText("第二段").appendThinking("思考");
+message.addImage("https://example.com/image.png");
+message.setText("修改正文"); // 保留思考、媒体、工具等其他类型内容块
+message.tag("draft").setMeta("displayName", "助手");
+const unsubscribe = message.onChange(({ revision }) => console.log(revision));
 ```
 
-如果你接 DeepSeek、Qwen 或其他 OpenAI-compatible 平台，只需要替换 `baseURL` 和 `model`：
+构造入口：`new Message(role, content?, metadata?, identity?)`、user、assistant、system、`tool(toolCallId, result, name?)`。content 为字符串或内容块数组，支持 text、thinking、image、audio、video、file、tool_call、tool_result。
 
-```ts
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com",
-});
-
-const agent = new Agent({
-  client,
-  model: "your-model-name",
-  session: Session.create("你是一个中文助手。"),
-});
-```
-
-## 核心心智模型
-
-一次常规 Agent 运行大致是这样的：
-
-```text
-User input
-  -> Message.user()
-  -> Session 追加用户消息
-  -> PromptBuilder 注入临时上下文
-  -> Adapter 序列化成平台请求格式
-  -> ModelClient.stream() 或 ModelClient.complete()
-  -> Parser 解析流式 chunk，或 Adapter 解析完整响应
-  -> Agent 派发事件并生成 assistant Message
-  -> 如果有 tool_calls，ToolKit 执行工具并写回 Session
-  -> 再次请求模型，直到获得最终回复
-```
-
-你可以只用 `Agent`，也可以单独使用底层模块：
-
-```ts
-import { Message, Session, Tool, ToolKit, StreamParser } from "@notic/agent-engine";
-```
-
-推荐学习顺序：
-
-1. 先用 `Agent + Session` 跑通一次模型调用。
-2. 再学习 `Tool + ToolKit`，让模型能调用你的函数。
-3. 然后学习 `PromptBuilder`，把系统规则、短期上下文、动态提示注入对话。
-4. 最后根据平台需要学习 `Provider`、`Adapter`、`MediaResolver` 和 `StreamParser`。
-
-## Message：统一消息模型
-
-`Message` 是 AgentEngine 的最小数据单位。无论是用户输入、模型回复、工具调用、工具结果，最终都会表示为 `Message`。
-
-### 创建消息
-
-```ts
-import { Message } from "@notic/agent-engine";
-
-const user = Message.user("你好");
-const assistant = Message.assistant("你好，我在。");
-const system = Message.system("你是一个严谨的助手。");
-const emptyRoot = Message.emptySystem();
-```
-
-多模态内容用链式方法追加：
-
-```ts
-const message = Message.user("请分析这张图")
-  .addImage("https://example.com/chart.png", "image/png")
-  .addFile("./data.csv", { fileName: "data.csv" })
-  .tag("analysis")
-  .setMeta("source", "user-upload");
-```
-
-也可以直接传入 `MessagePart`：
-
-```ts
-const message = Message.user([
-  { type: "text", text: "请总结这个文件" },
-  { type: "file", url: "./report.pdf", mimeType: "application/pdf" },
-]);
-```
-
-### 读取消息内容
-
-常用 getter：
-
-```ts
-message.text;        // 拼接所有 text 和 tool_result 内容
-message.thinking;    // 拼接所有 thinking 内容
-message.toolCalls;   // 当前消息中的 tool_call 列表
-message.hasMedia;    // 是否包含 image/audio/file
-message.hasThinking; // 是否包含 thinking
-```
-
-这些 getter 有缓存。如果你直接修改 `message.parts`，需要手动刷新：
-
-```ts
-message.parts.push({ type: "text", text: "追加内容" });
-message.invalidateCache();
-```
-
-如果使用 `addText()`、`addImage()` 等内置方法，缓存会自动失效。
-
-### 标签与元数据
-
-标签适合做查询、分组和后续插入定位：
-
-```ts
-const msg = Message.user("这条消息需要重点处理")
-  .tag("important", "todo")
-  .setMeta("priority", 10);
-
-msg.hasTag("important"); // true
-msg.untag("todo");
-```
-
-### 工具消息
-
-模型发起工具调用时，消息里会出现 `tool_call` part。工具执行完成后，用 `Message.tool()` 创建结果：
-
-```ts
-const toolResult = Message.tool(
-  "call_123",
-  JSON.stringify({ temperature: 21 }),
-  "get_weather"
-);
-```
-
-也可以手动构造 assistant 的工具调用消息，测试工具链时很有用：
-
-```ts
-const assistantCall = Message.assistantToolCalls([
-  { id: "call_123", name: "get_weather", arguments: "{\"city\":\"北京\"}" },
-]);
-```
-
-### 树结构
-
-`Message` 本身就是树节点。`Session` 会利用这个能力做分支会话。
-
-```ts
-const root = Message.system("系统提示");
-const user = root.append(Message.user("第一轮问题"));
-const assistant = user.append(Message.assistant("第一轮回答"));
-
-assistant.getHistory().map((msg) => msg.text);
-// ["系统提示", "第一轮问题", "第一轮回答"]
-```
-
-删除节点有两种模式：
-
-```ts
-message.remove("prune"); // 删除自己和所有后代
-message.remove("graft"); // 删除自己，但把子节点接到父节点下面
-```
-
-### 序列化
-
-```ts
-const json = message.toJSON();
-const restored = Message.fromJSON(json);
-```
-
-序列化会保留：
-
-- `role`
-- `parts`
-- `metadata`
-- `tags`
-- `model`
-- `usage`
-- 子树结构
-
-### Message API 摘要
-
-| API | 说明 |
+| 分类 | 接口 |
 | --- | --- |
-| `Message.user(content)` | 创建用户消息 |
-| `Message.assistant(content)` | 创建助手消息 |
-| `Message.system(content)` | 创建系统消息 |
-| `Message.emptySystem()` | 创建空系统根节点 |
-| `Message.tool(toolCallId, result, name?)` | 创建工具结果消息 |
-| `Message.assistantToolCalls(calls)` | 创建带工具调用的助手消息 |
-| `isEmpty` | 判断是否为空消息 |
-| `Message.pruneEmpty(messages)` | 返回移除空消息后的新数组 |
-| `addText(text)` | 追加文本 |
-| `addImage(url, mimeType?)` | 追加图片 |
-| `addAudio(url, mimeType?)` | 追加音频 |
-| `addFile(url, options?)` | 追加文件 |
-| `setText(text)` | 替换全部文本并保留非文本 part |
-| `setParts(content)` | 替换全部消息内容并自动失效缓存 |
-| `tag(...names)` / `untag(...names)` | 管理标签 |
-| `setMeta(key, value)` | 写入元数据 |
-| `append(child)` | 追加子节点 |
-| `remove("prune" \| "graft")` | 删除节点 |
-| `getHistory(includeRoot?)` | 获取根节点到当前节点的路径 |
+| 读取 | id、role、revision、requestRevision、requestMetadataKeys、parts、text、thinking、toolCalls、isEmpty、hasMedia、metadata、tags |
+| 编辑 | setText、appendText、setThinking、appendThinking、setParts、addPart、replacePart(partId,part)、removePart(partId)、update |
+| 附件 | addImage(url,mimeType?)、addAudio(url,mimeType?)、addVideo(url,mimeType?)、addFile(url,{mimeType?,fileName?}) |
+| 元数据 | setMeta、deleteMeta、tag、untag、hasTag |
+| 身份与存储 | snapshot、clone、toJSON、Message.fromJSON |
 
-## Session：会话树
+公开视图在运行时冻结，必须用编辑方法更新。编辑递增 revision，内容块有独立 ID。snapshot 保留身份与版本并隔离内容，clone 创建新身份。内容和元数据须为 JSON 数据，不能包含函数、Map 或循环对象。Message 没有父子节点或 Session 所有权。
 
-`Session` 管理一棵消息树。最常见的用法是让 `Agent` 自动写入用户消息、助手消息和工具结果。
+requestRevision 专门记录影响请求的编辑：内容块，以及协议元数据。业务 metadata 和 tags 的编辑只递增 revision，允许在提示词结算、工具执行和提交通知期间写入，不使运行租约或 ListSession 的后续行失效。内置协议键为 thinkingSignature、geminiThinkingSignature、openaiReasoningItems、toolName、name，不能把它们当成普通业务状态槽。
 
-### 创建会话
+自定义 Provider 或提示词转换依赖某个 metadata 键时，可用 `message.setMeta("routing", value, { affectsRequest: true })` 将它标记为请求相关。标记保存在 requestMetadataKeys 中；以后修改或删除这个键都会参与冲突检测，deleteMeta 也支持 affectsRequest。内容块内的 metadata 属于内容编辑，仍影响 requestRevision。`update({parts?,metadata?,tags?,requestMetadataKeys?})` 验证后一起更新，保留消息身份；不提供的字段保持原值。旧 3.0 快照缺少 requestRevision 时以 revision 初始化。
+
+## Session：组织、查询与执行记录
 
 ```ts
-import { Session } from "@notic/agent-engine";
-
-const session = Session.create("你是一个代码助手。");
+import { TreeSession, ListSession, AgentSession, restoreSession } from "@notic/agent-engine";
+const tree = TreeSession.create("系统提示");
+const list = ListSession.create({ candidateUnit: "sequence" });
+const rounds = AgentSession.create({ systemPrompt: "系统提示" });
+tree.addUser("问题");
+const actual = tree.query.messages({ role: Role.User })[0];
+actual.setText("修改问题");
+tree.editMessage(actual.id, message => message.tag("edited"));
+const restored = restoreSession(JSON.parse(JSON.stringify(tree.toJSON())));
 ```
 
-如果不传系统提示，会创建一个空 system root。这个 root 会保留在 `history()` 中，便于查询、插入和 `PromptBuilder` 定位；真正构建模型请求时，`Agent` 会自动移除空消息，避免发给不支持空系统消息的平台。
+共用接口：history 返回当前选中历史中的实际 Message（包含独立系统消息）；getMessage、addMessage、addUser、editMessage、systemPrompt、title、metadata、setMeta、deleteMeta、currentTurnId、isGenerating、query、trace、toJSON。手动添加 User 会创建真实交互记录，不推断手动 Assistant 的模型用量。
+
+Session.metadata 是独立的 JSON 业务数据槽，视图冻结，用 setMeta/deleteMeta 编辑，随 toJSON 保存；写入不影响运行租约。会话变量文档、开始脚本标记等可以放在这里。系统消息 metadata 同样受支持，修改 systemPrompt 文本会保留它；实际修改系统提示文本仍会引发运行冲突。
+
+beginGeneration / assertGenerationUnchanged / appendGenerated / appendContinuation / endGeneration 是编排器维护契约。自定义会话实现 SessionLike，或继承 BaseSession；SessionQuery 可接受提供 history / allMessages / trace 的对象。
+
+### TreeSession
+
+nodes 返回节点视图，节点 ID 与 Message ID 分开；rootNodeIds 返回有序根节点 ID。cursorNodeId 指向当前节点，nodeFor(messageId) 查找结构位置，select(nodeId|null) 选择路径；addMessage 在当前位置创建子节点。remove(nodeId,"prune"|"graft") 删除子树或将子节点接到父节点，嫁接保留原位置。系统提示不占空根节点。
+
+重生成时选择回复的父节点，再 agent.run，原分支保留。序列化采用平坦节点表，验证覆盖 3000 层深树。
+
+### 公开存储结构
+
+SessionData 是按 type 区分的 TreeSessionData / ListSessionData / AgentSessionData 联合类型，structure 不再是不透明字段。业务可以直接映射已有的平坦数据并调用 restoreSession，不必逐条重放。
+
+- TreeStructure：`{nodes: TreeNode[], roots?: string[], cursor: string|null}`；每个节点为 `{id,messageId,parentId,children}`。roots 和 children 的数组顺序决定根/兄弟顺序，节点表可以乱序。新导出始终写 roots；较早的 3.0 数据未写 roots 时按节点表中的根节点顺序导入。
+- ListStructure：`{candidateUnit:"sequence"|"turn",rows:ListRow[]}`；行是 `{id,selectedCandidateId,candidates}`，候选是 `{id,messageIds,turnId?,context}`。context 是引擎生成的历史有效性标记；导入现有 3.0 行时应保留它。
+- AgentStructure 同 ListStructure，但 candidateUnit 固定为 turn。
+
+节点和消息 ID 要求非空字符串、在各自表中唯一，无 UUID、特定字符集、全局唯一或额外长度限制。Message ID、节点 ID 与工具调用 ID 是不同身份。导入会校验引用、选择、父子关系、顺序和可达性。映射示例见 [CE 接入说明](./CE-FEEDBACK-3.0.md)。
+
+### ListSession 与 AgentSession
+
+ListSession 默认 sequence：一个 Agent 运行产生的 Assistant → Tool → Assistant 序列放入同一候选，User 通常占前一行。turn 模式将用户输入与交互内全部步骤放入同一候选。AgentSession 固定使用 turn，并提供 turns 查询。
+
+rows 返回只读行/候选视图。操作包含 select(rowId,candidateId)、addCandidate(rowId,messages)、removeCandidate(rowId,candidateId)、removeRow(rowId)、regenerate(rowId)、cancelRegeneration、truncateAfter(rowId|null)、acceptHistory 和 staleRowIds。
 
 ```ts
-const session = Session.create();
-session.history(); // [empty system root]
-session.history(false); // []
+list.regenerate(rowId);
+await listAgent.run();
 ```
 
-### 手动追加消息
+重生成较早行只使用之前的上下文，turn 模式还保留本轮输入；后续行保留但不进入本次请求。编辑或切换历史会使后续候选失效，生成前须截断、重生成或显式 acceptHistory。删除候选不会删除已发生的执行事实。
+
+### 查询与记录
+
+query.messages 支持 id、role、tags、content（字符串/正则）、partType、metadata、turnId、runId、stepId、toolCallId、predicate、offset、limit、scope。默认 scope=active；all 包含其他分支和候选。
+
+query.turns({scope?})、runs({turnId?,scope?})、steps({runId?,scope?})、toolExecutions({runId?,status?,scope?}) 查询记录。三类 Session 都保存：
+
+- Turn：一次用户交互及输入消息。
+- Run：一次 chat/run/continue/resume，含状态、停止原因、恢复来源。
+- Step：一次模型请求，含顺序、状态、输出、finishReason 和用量。
+- ToolExecution：调用 ID、参数、审批/执行状态与结果消息。
+- Contribution：步骤对消息的 create/append/replace 贡献；续写允许多个 Step 关联同一 Message。
+
+trace.records 返回冻结副本；trace.usage(runId?) 按步骤累计用量。存储格式为 format=agent-engine-session、version=3，保留所有消息、结构、选择和执行记录，不包含控制器、等待中的审批或工具函数。
+
+## Provider 与配置
+
+Provider 是可继承基类；聊天契约为 ChatProvider，Agent/Generator 接受结构化实现。ImageProvider、AudioProvider、VideoProvider、EmbeddingProvider 为独立能力契约，可由业务继承 Provider 或现有厂商 Provider 实现。完整接口、任务语义与示例见 [多媒体与继承](./MULTIMEDIA-3.0.md)。EmbeddingProvider 当前只提供契约，没有内置厂商向量协议。
 
 ```ts
-session.addUser("你好");
-session.addAssistant(Message.assistant("你好，我在。"));
-
-session.history().map((msg) => msg.text);
-// ["", "你好", "你好，我在。"]
+import { OpenAIProvider, OpenAIResponsesProvider, AnthropicProvider, GeminiProvider } from "@notic/agent-engine";
+const provider = new OpenAIProvider({ apiKey: "key", baseURL: "https://your-proxy/v1" });
+const wire = await provider.buildRequest({
+  model: "your-model", messages: [Message.user("问题")],
+  generation: { maxOutputTokens: 2048, temperature: 0.4 },
+}, false);
 ```
 
-如果你已经有完整 `Message` 对象，用 `addMessage()`：
+HTTP Provider 接受 apiKey（字符串/异步函数）、baseURL、headers、transport、mediaResolver。buildRequest(request,stream?,signal?) 只转换，不发送；generate(request,{stream,signal?},emit?) 返回统一 ModelResponse，普通业务使用 Generator 取得配置校验与稳定身份。
 
-```ts
-const msg = Message.user("带标签的输入").tag("important");
-session.addMessage(msg);
-```
+generation 字段：temperature、topP、topK、maxOutputTokens、stop、frequencyPenalty、presencePenalty、seed、responseFormat、providerOptions。responseFormat 为 text、json_object 或 `{type:"json_schema",name?,schema}`。
 
-工具结果用 `addTool()`，它可以一次追加多条：
-
-```ts
-session.addTool([
-  Message.tool("call_1", "{\"ok\":true}", "save_file"),
-  Message.tool("call_2", "{\"ok\":true}", "run_test"),
-]);
-```
-
-### 历史与光标
-
-`Session` 有一个当前光标 `cursor`，所有新增消息都会挂在光标后面。
-
-```ts
-session.cursor;          // 当前消息
-session.history();       // root -> cursor 的路径
-session.history(false);  // 不包含 root
-session.messages;        // history(true) 的别名
-```
-
-### 分支与回退
-
-回退到旧消息后再追加新消息，会自然产生分支：
-
-```ts
-const first = session.addUser("方案 A 怎么做？");
-session.addAssistant(Message.assistant("A 的回答"));
-
-session.rewind(first);
-session.addUser("那方案 B 呢？");
-session.addAssistant(Message.assistant("B 的回答"));
-```
-
-这时 `first` 下面有两个子分支。你可以用分页器在兄弟分支间切换。
-
-### Query：查询消息
-
-`session.query` 返回查询器。它不是链式 builder，而是提供一组直接返回结果的方法：
-
-```ts
-import { Role } from "@notic/agent-engine";
-
-const users = session.query.findByRole(Role.User);
-const important = session.query.findByTags(["important"]);
-
-const latestAnswer = session.query.findLast({ roles: [Role.Assistant] });
-```
-
-常见查询条件：
-
-```ts
-session.query.findByContent(["error"]);
-session.query.findByTags(["todo"], { scope: "tree" });
-session.query.findBy((msg) => msg.text.length > 100);
-session.query.findFirst({ content: ["关键问题"] });
-session.query.findLast({ roles: [Role.User] });
-```
-
-### Inserter：在历史中插入消息
-
-`Inserter` 适合做会话修补、动态插入上下文等操作。
-
-```ts
-const anchor = session.query.findFirst({ content: ["关键问题"] });
-
-if (anchor) {
-  session.inserter
-    .moveTo(anchor)
-    .insertAfter(Message.system("补充背景：这是一个高优先级任务"))
-    .execute();
-}
-```
-
-常见操作：
-
-```ts
-session.inserter.moveTo(anchor).insertAfter(msg).execute();
-session.inserter.moveTo(anchor).insertBefore(msg).execute();
-
-// 光标移动方法
-session.inserter.top().insertAssistantBefore("插到顶部之前").execute();
-session.inserter.bottom().insertUserAfter("追加一条用户消息").execute();
-session.inserter.move(2); // 偏移移动，正数向后，负数向前
-session.inserter.moveByContent(["关键词"]); // 按内容定位光标
-session.inserter.moveByTags(["important"]); // 按标签定位光标
-
-// 查询当前状态
-session.inserter.current;     // 光标当前指向的消息
-session.inserter.position;    // 光标索引
-session.inserter.isExpired;   // 插入器是否已执行（报废）
-session.inserter.pendingCount;// 排队中的命令数量
-```
-
-### Paginator：切换分支
-
-```ts
-const paginator = session.paginator(parentMessage);
-
-if (paginator) {
-  paginator.total;     // 分支数量
-  paginator.currentIndex; // 当前分支序号
-  paginator.next();    // 切到下一个分支
-  paginator.prev();    // 切到上一个分支
-  paginator.goTo(0);   // 切到指定分支
-}
-```
-
-### Session API 摘要
-
-| API | 说明 |
+| 实现 | 不支持的统一参数 |
 | --- | --- |
-| `Session.create(systemPrompt?)` | 创建会话 |
-| `addUser(content)` | 追加用户消息 |
-| `addAssistant(message)` | 追加助手消息 |
-| `addTool(messages)` | 追加工具结果 |
-| `addMessage(message)` | 追加任意消息 |
-| `history(includeRoot?)` | 获取当前路径 |
-| `rewind(message)` | 把光标回退到指定消息 |
-| `query` | 查询器 getter |
-| `inserter` | 插入器 getter |
-| `paginators` | 当前路径上的所有分支分页器 |
-| `paginator(message)` | 创建指定父节点的分支分页器 |
-| `clear()` | 清空会话到 root |
-| `systemPrompt` | 读取或设置系统提示 |
-| `toJSON()` / `fromJSON()` | 序列化与恢复 |
+| OpenAIProvider / OpenAICompatibleProvider | topK |
+| OpenAIResponsesProvider | topK、stop、seed、frequencyPenalty、presencePenalty |
+| AnthropicProvider | frequencyPenalty、presencePenalty、seed、responseFormat |
+| GeminiProvider | 以上字段均有转换，具体模型能力由服务端确认 |
 
-### ListSession：候选列表会话
+不支持或统一/原生冲突的参数会报错；具体模型可能进一步限制取值。Anthropic 未指定输出上限时使用 4096。providerOptions 是平台扩展，不配置运行超时、审批或上下文；不能覆盖 model/messages/input/contents/tools/stream/system。框架不会自动重试模型请求。
 
-`ListSession` 与树状 `Session` 并列，适合"每条回复可以左右切换候选"的列表式界面。它由若干 **行（row）** 线性组成，每行持有多个 **候选（candidate）**；一次工具循环产生的全部消息（assistant → tool → assistant）属于同一个候选，切换候选时整段轨迹一起切换。
+transport 接收 `{url,method,headers,body?,signal,stream,purpose?}` 并返回标准 Response，支持 GET/POST/PUT/PATCH/DELETE 和 JSON、multipart、二进制 body。stream 始终为显式 boolean，内置聊天请求的 purpose 为 chat；子类可设置 image/audio/video/embedding/models/custom，未指定时基类采用 custom。这些字段是传输描述，不写入请求 body。业务可据此实现单次请求超时，与 execution.timeoutMs 的整次运行预算分别处理。
 
-`Agent` 通过 `AgentSession` 接口接受任意会话实现，并从传入的实例推断类型，所以 `agent.session` 仍保留具体类型：
+业务可桥接代理/Tauri；流式 Response 的 body 需提供 Web ReadableStream。mediaResolver.resolve(url) 返回 `{base64,mimeType}`，可处理业务附件地址。浏览器默认 BrowserMediaResolver，本地文件解析器从 /node 导入 DefaultMediaResolver。
+
+thinking 可配置 mode=none/native/message/auto、scope=none/last/tool_call/all、include(message,index,messages)、messagePrefix。Agent 默认在工具循环回传 thinking；续写初始请求另有临时思考载体。转换保留工具元数据、thinking 签名与 Responses reasoning items。
+
+thinking 的字段覆盖顺序是 Generator 构造配置 → Agent 构造配置 → 单次运行配置，Agent 底层默认值为 `{mode:"auto",scope:"tool_call"}`。Generator 单独使用时支持构造和 generate 两层配置。`carryThinking:false` 控制续写的临时文本思考载体，`thinking:{mode:"none"}` 控制已有 thinking 内容块的协议回传；如要同时关闭，两个选项一起设置。
+
+## Generator：一次请求
 
 ```ts
-import { Agent, ListSession } from "@notic/agent-engine";
-
-const session = ListSession.create("你是一个助手");
-const agent = new Agent({ client, model: "gpt-4o", session });
-
-await agent.run("你好");
-
-// 对第 2 行重新生成一个候选，只用它之前的行作为上下文
-session.regenerate(session.rows[1].id);
-await agent.generate();
-
-// 切回旧候选，后面的行不会被删除
-session.select(session.rows[1].id, session.rows[1].candidates[0].id);
+import { Generator } from "@notic/agent-engine";
+const generator = new Generator({ provider, model: "your-model", generation: { temperature: 0.3 } });
+const config = generator.effectiveConfig({ maxOutputTokens: 1024 });
+const response = await generator.generate({
+  messages: session.history(), tools: toolkit.definitions,
+  generation: { maxOutputTokens: 1024 }, stream: true, signal: controller.signal,
+});
 ```
 
-切换靠前的候选不会创建分支、也不会抹掉后面的行，但后续行的上下文已经变了。这些行会出现在 `staleRowIds` 中，此时继续生成会抛错，需要显式选择处理方式：
+返回 message、usage?、model?、finishReason?。输入使用隔离快照，不写 Session、不执行工具、不重复请求。构造配置与单次覆盖浅合并；providerOptions 整体覆盖；effectiveConfig 返回副本。
 
-| 处理方式 | 含义 |
-| --- | --- |
-| `acceptHistory()` | 承认保留下来的后续内容，按新上下文继续 |
-| `truncateAfter(rowId)` | 丢弃该行之后的所有行 |
-| `regenerate(rowId)` | 在该行重新生成，只使用它之前的行 |
+事件：messageStarted、textDelta、thinkingDelta、toolCallDelta、messageGenerated，含 messageId/stepId/runId?，最终 ID 与流式一致。on(type|"*",handler) 返回退订函数；generate 也接受 onEvent 和 identity。Generator 事件处理器异常使调用失败。
 
-`toJSON()` / `ListSession.fromJSON()` 会完整保存所有候选、轨迹和当前选择，恢复时对 id 唯一性、角色一致性和选中项做严格校验。
+ProviderRequestError 含 HTTP status；流失败用 GenerationError(cause,partial?) 保留部分响应。自定义聊天实现 ChatProvider.generate，应把 signal 传到真实操作；Generator 会限制独立实现的等待并忽略迟到事件。HttpProvider 子类覆盖 generate 时需遵守原有取消契约，以保留原生部分状态。取消无法终止忽略 signal 的底层副作用，传输和工具需合作取消。
 
-> 注意：候选切换只影响会话内容，**不会撤销工具已经产生的副作用**；应用重启后的 Agent 运行现场恢复也不由 `ListSession` 单独负责。
-
-### ListSession API 摘要
-
-| API | 说明 |
-| --- | --- |
-| `ListSession.create(systemPrompt?)` | 创建候选列表会话 |
-| `rows` | 只读行列表，每行含候选与当前选中项 |
-| `alternatives` | 二维投影，每行候选的最终消息 |
-| `history(includeRoot?)` | 当前选择下的完整历史 |
-| `addUser/addAssistant/addTool/addMessage` | 追加消息，与 `Session` 一致 |
-| `addCandidate(rowId, message)` | 手动为某行添加候选 |
-| `removeCandidate(rowId, candidateId)` | 删除候选（不可删到空行） |
-| `select(rowId, candidateId)` | 切换某行的选中候选 |
-| `regenerate(rowId)` | 标记下一次 `generate()` 在该行生成新候选 |
-| `cancelRegeneration()` | 取消上面的标记 |
-| `truncateAfter(rowId \| null)` | 截断该行之后的内容 |
-| `staleRowIds` | 上下文已失效的行 |
-| `acceptHistory()` | 接受保留的后续历史 |
-| `beginGeneration()` / `endGeneration()` | 生成边界，由 `Agent` 自动调用 |
-| `clear()` | 清空所有行 |
-| `toJSON()` / `ListSession.fromJSON()` | 序列化与恢复 |
-
-## Tool：工具系统
-
-工具让模型可以调用你的 TypeScript 函数。AgentEngine 的工具系统包含四层：
-
-- `Param`：定义参数 JSON Schema。
-- `Tool`：定义函数、名称、描述、参数和生命周期 Hook。
-- `ToolKit`：注册多个工具，并根据模型的 `tool_call` 执行对应函数。
-- `Context`：工具执行期间共享的上下文，可读写参数、结果和错误。
-
-### 定义第一个工具
+## ToolExecutor：独立审批与执行
 
 ```ts
-import { Param, Tool, ToolKit } from "@notic/agent-engine";
-
-const getWeather = Tool.create(async (args) => {
-  const city = args.city as string;
-  return { city, temperature: 21, unit: "celsius" };
-})
-  .name("get_weather")
-  .description("查询城市天气")
-  .params(
-    Param.string("city").desc("城市名称，例如北京").required(),
-    Param.string("unit").desc("温度单位").enum(["celsius", "fahrenheit"])
-  )
-  .build();
-
-const toolkit = new ToolKit().add(getWeather);
+import { Tool, ToolKit, ToolExecutor } from "@notic/agent-engine";
+const toolkit = new ToolKit().add(Tool.define<{ path: string }>({
+  name: "read_file", description: "读取文件", requiresApproval: true,
+  parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+  execute: async ({ path }, context) => {
+    context.throwIfAborted();
+    return fileService.read(path, context.signal);
+  },
+}));
+const executor = new ToolExecutor({ toolkit, approval: "manual", approvalTimeoutMs: 60_000 });
+executor.on("approvalRequired", event => {
+  if (event.type === "approvalRequired") showApproval(event.request);
+});
+const outcome = await executor.execute(toolCall, { signal: controller.signal });
+// UI 调用 executor.approve(request.approvalId) 或 reject(id,reason?)。
 ```
 
-传给 Agent：
+JSON Schema 支持 draft-07 和显式声明 draft-2020-12；参数校验后才审批。Tool.validate、definition、execute 可单独使用；直接 Tool.execute 不经过审批，完整入口为 Executor.execute。
+
+ToolKit 提供 add/get/has/size/enable/disable/isEnabled/definitions。禁用工具既不对模型可见，也不能执行；通过审批后再次检查启用状态。addMCP 接受 listTools/callTool 结构化客户端，无需框架依赖 MCP SDK，业务负责连接/关闭。
+
+Executor 配置 approval=auto/manual/policy、approvalTimeoutMs、errorPolicy=return/throw。policy 可异步返回 allow/deny/ask 或 `{action,reason?}`，显式 policy 决定授权；默认模式遵守 requiresApproval。deny、拒绝和审批超时返回 rejected；工具异常默认返回失败结果，throw 模式抛 ToolExecutionError。取消始终抛出并记录 interrupted。
+
+返回 `{message,record}`。pendingApprovals 返回副本，approve/reject 返回是否找到审批；事件为 approvalRequired 和 toolUpdated。execute 的 onRecord 保存进度，context 提供 signal、runId、stepId、toolExecutionId、toolCallId。
+
+## Agent：自主运行与提交
 
 ```ts
 const agent = new Agent({
-  client,
-  model: "your-model",
-  session: Session.create("你可以在需要时调用工具。"),
-  toolkit,
+  provider, model: "your-model", session, promptBuilder, toolkit,
+  tools: { approval: "manual", approvalTimeoutMs: 60_000 },
+  execution: { maxSteps: 10, timeoutMs: 120_000, toolConcurrency: "sequential", toolErrorPolicy: "return" },
 });
+const result = await agent.chat("完成任务");
 ```
 
-当模型返回工具调用时，Agent 会自动：
+模型来源为 provider+model 或 generator，二者互斥；Session 为传入实例或 mode+sessionOptions，二者互斥。可传 toolExecutor，同时传 toolkit 时必须指向同一注册表。自动实例可通过 agent.session/promptBuilder/generator/toolExecutor 获取。
 
-1. 解析 `tool_call`
-2. 审批工具调用
-3. 调用 `ToolKit.execute()`
-4. 把工具结果作为 `tool` 消息写回 `Session`
-5. 再次请求模型生成最终答案
-
-### 参数定义 Param
-
-```ts
-import { ValueType } from "@notic/agent-engine";
-
-Param.string("name").required().desc("姓名");
-Param.integer("age").desc("年龄");
-Param.number("score");
-Param.boolean("enabled");
-Param.array("tags", ValueType.String);
-Param.object("range", [
-  Param.number("min").required(),
-  Param.number("max").required(),
-]);
-```
-
-数组元素可以是基本类型，也可以是对象参数：
-
-```ts
-const items = Param.array("items", [
-  Param.string("title").required(),
-  Param.integer("count").required(),
-]);
-```
-
-### 生命周期 Hook
-
-Hook 让你在工具执行的不同阶段插入逻辑：
-
-```ts
-import { Hook } from "@notic/agent-engine";
-
-const tool = Tool.create(async (args) => {
-  return { ok: true, args };
-})
-  .name("save")
-  .description("保存数据")
-  .params(Param.string("content").required())
-  .on(Hook.ON_VALIDATE, (ctx) => {
-    if ((ctx.arguments.content as string).length === 0) {
-      throw new Error("content 不能为空");
-    }
-  })
-  .on(Hook.AFTER_EXECUTE, (ctx) => {
-    ctx.result = { ...ctx.result as object, savedAt: new Date().toISOString() };
-  })
-  .on(Hook.ON_ERROR, (ctx) => {
-    ctx.result = { ok: false, error: ctx.error?.message };
-  })
-  .build();
-```
-
-Hook 顺序：
-
-```text
-ON_CREATE -> ON_VALIDATE -> BEFORE_EXECUTE -> function -> AFTER_EXECUTE -> ON_SERIALIZE
-                                      \-> ON_ERROR
-```
-
-常用 Hook：
-
-| Hook | 用途 |
+| 接口 | 行为 |
 | --- | --- |
-| `ON_CREATE` | 工具调用对象创建后 |
-| `ON_VALIDATE` | 内置必填校验前后做额外校验 |
-| `BEFORE_EXECUTE` | 真正执行函数前 |
-| `AFTER_EXECUTE` | 函数成功执行后，可改写结果 |
-| `ON_SERIALIZE` | 转成 `Message.tool()` 前 |
-| `ON_ERROR` | 校验或执行出错时，可设置 fallback result |
+| chat(input,options?) | 添加 User，开始交互，自动执行模型/工具循环 |
+| run(options?) | 从已准备历史执行，不添加用户消息 |
+| continue(options?) | 扩展最后选中 Assistant，支持 targetMessageId/instruction/carryThinking |
+| resume(options?) | 接续本实例上一失败/中断运行，新 Run 关联同一 Turn 和 resumedFrom |
+| abort(reason?) | 取消当前运行 |
+| previewContext(options?) | 无消耗预览 run、continue 或 resume 请求上下文 |
 
-### Context
+options 支持 signal、stream、generation、execution、thinking。maxSteps 默认 10；timeoutMs 覆盖模型、工具和审批等待；工具默认 sequential，也可 parallel，与 toolErrorPolicy 独立。return 将异常回传模型；pause/throw 保存失败工具结果后结束，应用决定是否 resume。审批拒绝是工具结果。
 
-工具函数和 Hook 都能访问 `Context`：
+AgentResult 包含 runId/turnId?/status/stopReason/message?/usage/error?/unapplied?/unappliedToolResults?。失败、取消、超时、maxSteps、输出长度限制抛 AgentRunError，其 result 保存进度；lastRunState 保存最近结果。一个 Agent 或一个 Session 同时只允许一个活动 Agent 执行，重叠 chat 在添加输入前被拒绝。
 
-```ts
-const tool = Tool.create(async (args, ctx) => {
-  ctx.throwIfAborted();
-  ctx.result = { ok: true };
-  return ctx.result;
-});
-```
+续写用临时 Assistant 文本回传旧思考，再加临时 User 指令；两者先进入 PromptBuilder 再进行注入与转换，不写入 Session。它们有 TEMPORARY_PROMPT_TAG 和对应 CONTINUATION_THINKING_TAG / CONTINUATION_INSTRUCTION_TAG，来源标签为 agent.continue.thinking / agent.continue.instruction。`previewContext({kind:"continue",targetMessageId?,instruction?,carryThinking?})` 使用同一构建路径；预览不消费 injection life，转换函数的外部副作用仍由业务管理。预览不执行 beforeRequest、平台编码或网络请求。
 
-常用字段：
+新增文本、思考和媒体追加到目标，身份保持；默认业务 metadata 浅合并，生成值优先，tags 取并集。带工具调用时，工具相关思考只留在独立的工具调用消息上，不重复并入目标；签名和 reasoning items 按协议保留。多段 thinking 保持独立块，显示分隔由业务处理。初始续写生成失败不合并不完整输出，取消则保留部分输出；已完成步骤不会因后续失败撤回。
 
-- `ctx.id`
-- `ctx.name`
-- `ctx.arguments`
-- `ctx.result`
-- `ctx.error`
-- `ctx.cancelled`
-- `ctx.cancelReason`
-- `ctx.signal`
-- `ctx.cancel(reason)`
-- `ctx.throwIfAborted()`
+修改请求历史的内容、协议 metadata 或会话结构/选择会触发 SessionConflictError；业务 metadata/tags 写入不触发。发生冲突时保留用户修改，并在 result.unapplied 返回未应用输出；若工具已执行但提交冲突，unappliedToolResults 保留实际工具结果，trace 保留执行事实。普通生成失败/取消保留部分内容；残缺工具调用补失败结果。已发生的副作用无法撤回。resume 不重放已保存工具结果，但模型可能再次请求相同操作，敏感业务应实现幂等控制。
 
-### ToolKit 执行工具
+导入 Session 恢复数据，不恢复进程运行、等待审批或 exactly-once 工具现场。新 Agent 不能 resume 另一实例运行，可显式 run 已导入上下文。
+
+### 生命周期与业务保存
+
+hooks.beforeRequest(context,identity) 修改请求副本；beforeCommit(message,commitContext) 修改或返回替代生成 Message；afterCommit(actualMessage,commitContext) 在内存提交后执行；afterRun(result) 在运行结算后执行。hook 可异步，内存提交与业务数据库保存分别处理。
+
+续写时 beforeCommit 的 context 带 operation=append、targetMessageId 和隔离的 targetMessage 快照。然后 `beforeAppend(draft,context)` 收到默认合并后的目标草稿，context.targetMessage / generatedMessage 都是隔离快照；可以编辑草稿或返回保留目标 ID/role 的替代 Message。草稿在钩子成功、身份/协议与租约检查通过后才提交，失败不写入目标。异步等待期间其他业务 metadata/tags 的无关修改会保留；同一个键由钩子显式覆盖或删除时按钩子决定。续写取消后保留部分输出也走这个合并点。
+
+afterCommit 失败保留已提交内容，停止后续执行；afterRun 失败用 AgentRunError 携带原结果，运行状态仍表示实际执行事实。Agent 通知事件包含 Generator、Executor 事件，以及 runStarted/messageCommitted/runFinished。messageCommitted.message 为提交快照。普通通知异常交给 onHandlerError，不用于转换；显示、保存、发送的内容可以不同。
+
+## PromptBuilder：独立临时上下文
 
 ```ts
-const result = await toolkit.execute({
-  type: "tool_call",
-  toolCallId: "call_1",
-  name: "get_weather",
-  arguments: "{\"city\":\"北京\"}",
-});
-
-console.log(result.text);
-```
-
-执行多个工具：
-
-```ts
-const results = await toolkit.executeAll(toolCalls);
-```
-
-错误策略：
-
-```ts
-await toolkit.execute(toolCall, { errorPolicy: "return_to_model" });
-await toolkit.execute(toolCall, { errorPolicy: "throw" });
-await toolkit.execute(toolCall, { signal: abortController.signal }); // 传入 AbortSignal
-```
-
-- `return_to_model`：工具异常会转成模型可读的 tool result（默认）。
-- `throw`：抛出 `ToolExecutionError`。
-- `signal`：传入 `AbortSignal` 供工具内部响应取消。
-
-### MCP 工具
-
-如果你使用 Model Context Protocol，可以把 MCP client 的工具导入 `ToolKit`：
-
-```ts
-await toolkit.addMCP(mcpClient);
-```
-
-MCP client 需要提供：
-
-```ts
-interface McpClientLike {
-  listTools(): Promise<{
-    tools: Array<{
-      name: string;
-      description?: string;
-      inputSchema: Record<string, unknown>;
-    }>;
-  }>;
-
-  callTool(params: {
-    name: string;
-    arguments?: Record<string, unknown>;
-  }): Promise<{
-    content: Array<{ type: string; text?: string }>;
-  }>;
-}
-```
-
-### Tool API 摘要
-
-| API | 说明 |
-| --- | --- |
-| `Tool.create(fn)` | 创建工具 builder |
-| `Tool.fromRaw(name, desc, schema, fn)` | 从已有 schema 创建工具 |
-| `tool.name(name)` | 设置工具名 |
-| `tool.description(desc)` | 设置描述 |
-| `tool.params(...params)` | 添加参数 |
-| `tool.on(hook, handler)` | 注册 Hook |
-| `tool.build()` | 冻结 schema，进入运行态 |
-| `tool.schema` | OpenAI tools schema |
-| `tool.create(id, args, signal?)` | 创建一次具体工具调用 |
-| `new ToolKit().add(...tools)` | 注册工具 |
-| `toolkit.schemas` | 所有工具 schema |
-| `toolkit.execute(call, options?)` | 执行单个工具调用 |
-| `toolkit.executeAll(calls, options?)` | 执行多个工具调用 |
-
-## Stream：流式事件
-
-`StreamParser` 把 OpenAI-compatible 的流式 chunk 解析成结构化事件。你通常不需要手动使用它，因为 `Agent` 已经内置；但写底层测试、自定义客户端或调试流式协议时很有用。
-
-### 手动解析 stream
-
-```ts
-import { StreamParser, StreamEventType } from "@notic/agent-engine";
-
-const parser = new StreamParser();
-
-for await (const chunk of stream) {
-  const events = parser.feed(chunk);
-
-  for (const event of events) {
-    if (event.type === StreamEventType.TEXT_DELTA) {
-      process.stdout.write(event.delta);
-    }
-  }
-}
-
-const finalEvents = parser.finish();
-const done = finalEvents.find((event) => event.type === StreamEventType.MESSAGE_DONE);
-console.log(done?.message.text);
-```
-
-### 支持的增量内容
-
-`StreamParser` 支持：
-
-- `delta.content`：文本
-- `delta.reasoning_content`：DeepSeek / Qwen 等推理内容
-- `delta.thinking`：Claude-like thinking 内容
-- `delta.tool_calls`：工具调用增量
-- `usage`：stream usage chunk
-
-`reset()` 可重置解析器内部状态，重用解析器实例。
-
-### 常用事件
-
-| 事件 | 触发时机 |
-| --- | --- |
-| `TEXT_DELTA` | 收到文本增量 |
-| `TEXT_DONE` | 文本流结束 |
-| `THINKING_DELTA` | 收到思考增量 |
-| `THINKING_DONE` | 思考流结束 |
-| `TOOL_CALL_START` | 第一次拿到工具调用 id 和 name |
-| `TOOL_CALL_DELTA` | 收到工具参数增量 |
-| `TOOL_CALL_DONE` | 工具调用参数组装完成 |
-| `MESSAGE_DONE` | 完整 assistant message 组装完成 |
-| `ERROR` | chunk 解析异常 |
-
-`Agent` 会额外派发：
-
-| 事件 | 触发时机 |
-| --- | --- |
-| `TURN_START` | 新一轮模型调用开始 |
-| `TURN_END` | 一轮模型调用结束 |
-| `TOOL_APPROVAL_REQUIRED` | 工具调用需要审批 |
-| `TOOL_APPROVAL_ACCEPTED` | 工具调用审批通过 |
-| `TOOL_APPROVAL_REJECTED` | 工具调用审批拒绝 |
-| `TOOL_EXECUTE_START` | 工具开始执行 |
-| `TOOL_EXECUTE_DONE` | 工具执行完成 |
-| `TOOL_EXECUTE_ERROR` | 工具执行失败 |
-| `BEFORE_ASSISTANT_COMMIT` | Assistant 写入 Session 前；监听器会按注册顺序等待完成 |
-
-## Prompt：提示词构建
-
-`PromptBuilder` 用来在模型请求前动态改写上下文。它不会修改原始 `Session`，而是基于 `history` 生成一个临时消息数组。
-
-适合这些场景：
-
-- 在最近一条用户消息前插入临时规则。
-- 在系统提示后追加运行时上下文。
-- 按标签、角色、内容定位消息，然后插入补充说明。
-- 在发送模型前过滤、裁剪或改写历史。
-
-### 注入一条系统提示
-
-```ts
-import { PromptBuilder, Rule } from "@notic/agent-engine";
-
 const builder = new PromptBuilder();
-
-builder.injectSystem(
-  Rule.top().after(),
-  "运行时上下文：当前用户是高级开发者。"
-);
-
-const context = builder.build(session.history());
-```
-
-`Rule.top().after()` 的意思是：定位到第一条消息，在它后面插入。
-
-如果 `history` 里包含空 system root，它也可以作为定位锚点。`build()` 会在所有注入和数组操作完成后默认移除空消息，因此空 root 可参与定位，但不会进入最终上下文：
-
-```ts
-const session = Session.create();
-session.addUser("你好");
-
-const builder = new PromptBuilder();
-builder.injectSystem(Rule.top().after(), "运行时上下文");
-
-builder.build(session.history()).map((msg) => msg.text);
-// ["运行时上下文", "你好"]
-```
-
-需要保留空消息用于调试时，可以传入：
-
-```ts
-builder.build(session.history(), { dropEmptyMessages: false });
-```
-
-### 按角色定位
-
-```ts
-import { Role } from "@notic/agent-engine";
-
-builder.injectSystem(
-  Rule.byRole(Role.User).last().before(),
-  "请优先回答用户最近的问题。"
-);
-```
-
-### 按内容或标签定位
-
-```ts
-builder.injectAssistant(
-  Rule.byContent(["数据库", "迁移"]).after(),
-  "已检测到数据库迁移相关上下文。"
-);
-
-builder.injectSystem(
-  Rule.byTags(["important"]).before(),
-  "下面是一条重要消息。"
-);
-```
-
-### 生命周期、概率和优先级
-
-```ts
-builder.injectSystem(Rule.top().before(), "只生效一次", {
-  life: 1,
-  probability: 1,
-  priority: 10,
+builder.injectSystem("本次临时规则", { life: 1, source: "business-rule", position: "beforeLastUser" });
+builder.use(async messages => {
+  const last = messages.at(-1);
+  if (last?.role === Role.User) last.appendText("\n附加请求内容");
+  return messages;
 });
+const preview = await builder.preview(session.history());
+const context = await builder.buildContext(session.history());
 ```
 
-- `life: -1`：永久有效。
-- `life: 1`：触发并构建一次后过期。
-- `probability`：0 到 1，控制是否触发。
-- `priority`：多个 injection 的执行优先级，数值越小越早执行。
+接口：inject/injectSystem/remove/clear/use/slice/build/buildContext/preview。position=start/end/beforeLastUser 或插入索引函数；life=-1 永久、0 禁用、正整数为成功构建次数。预览和失败转换不消费；Agent 每个模型步骤构建一次，构建成功即消费，即使随后网络失败。共享 builder 的并发消费由业务协调。
 
-清理过期 injection：
+全部使用 detached Message 快照，临时内容不进 Session。build 返回 Message[]，buildContext/preview 返回 `{messages,sources}`；sources 含 messageId、sourceMessageId/sourceRevision、injected 和业务 source 标签。新身份视为派生/注入内容；业务宏结算通过提交 hooks 管理。
+
+use 的变换可以返回原来的 Message[]，也可返回 `{messages,sources?:PromptSourceInput[]}`。例如：
 
 ```ts
-builder.prune();
-```
-
-### batch 与 immediate
-
-`build()` 默认使用 `batch`：
-
-```ts
-builder.build(history, { strategy: "batch" });
-```
-
-- `batch`：所有 injection 都基于原始 history 定位。
-- `immediate`：后面的 injection 能看到前面 injection 插入后的结果。
-
-例子：
-
-```ts
-builder.injectSystem(Rule.bottom().after(), "第一条");
-builder.injectSystem(Rule.byContent(["第一条"]).after(), "第二条");
-
-builder.build(history, { strategy: "batch" });     // 第二条找不到第一条
-builder.build(history, { strategy: "immediate" }); // 第二条能插入到第一条后面
-```
-
-### 数组操作管线
-
-除了 injection，`PromptBuilder` 还可以像数组管线一样改写上下文：
-
-```ts
-builder
-  .filter((msg) => msg.text.length > 0)
-  .slice(-20)
-  .map((msg) => msg)
-  .insertAt(0, Message.system("最高优先级规则"));
-
-const context = builder.build(session.history());
-```
-
-常用操作：
-
-```ts
-builder.use((messages) => messages);
-builder.insertAt(index, message);
-builder.removeAt(index, count);
-builder.removeWhere((msg) => msg.hasTag("debug"));
-builder.replaceWhere((msg) => msg.hasTag("old"), Message.system("new"));
-builder.filter((msg) => msg.role !== Role.Tool);
-builder.slice(-10);
-builder.map((msg, i) => msg);
-builder.transform((messages) => messages.reverse());
-```
-
-### Rule API 摘要
-
-| API | 说明 |
-| --- | --- |
-| `Rule.top()` | 定位第一条消息 |
-| `Rule.bottom()` | 定位最后一条消息 |
-| `Rule.index(n)` | 定位指定索引，支持负数 |
-| `Rule.byRole(role)` | 按角色定位 |
-| `Rule.byContent(keywords, options?)` | 按内容关键词定位 |
-| `Rule.byTags(tags)` | 按标签定位 |
-| `Rule.by(fn)` | 自定义谓词 |
-| `first()` / `last()` / `all()` | 匹配策略 |
-| `before()` / `after()` | 插入方向 |
-| `offset(n)` | 在匹配点上偏移 |
-| `order(n)` | 同插入点展示顺序 |
-| `scanDepth(n)` | 限制扫描深度 |
-| `scanForward()` / `scanReverse()` | 扫描方向 |
-| `resolve(messages)` | 返回插入索引 |
-
-### PromptBuilder API 摘要
-
-| API | 说明 |
-| --- | --- |
-| `inject(rule, message, options?)` | 注入任意消息 |
-| `injectSystem(rule, content, options?)` | 注入 system 消息 |
-| `injectUser(rule, content, options?)` | 注入 user 消息 |
-| `injectAssistant(rule, content, options?)` | 注入 assistant 消息 |
-| `injectAll(rule, messages, options?)` | 批量注入 |
-| `remove(injection)` / `removeById(id)` / `removeByRule(rule)` | 删除 injection |
-| `enable(injection)` / `disable(injection)` | 启用或禁用 |
-| `clearInjections()` | 清空 injection |
-| `clearOperations()` | 清空操作管线 |
-| `clear()` | 清空 injection 和 operation |
-| `build(history, options?)` | 生成临时上下文，默认移除空消息 |
-| `buildBatch(history, options?)` | batch 构建 |
-| `buildImmediate(history, options?)` | immediate 构建 |
-| `injections` | 只读注入列表 |
-| `aliveCount` / `expiredCount` / `activeCount` | 注入统计 |
-| `findByRule(rule)` / `findById(id)` | 查找注入 |
-| `operations` | 只读操作管线列表 |
-| `removeOperation(label)` | 按标签移除操作 |
-
-## Config：请求参数
-
-`RequestConfig` 用链式 API 构建模型请求参数。
-
-```ts
-import { RequestConfig } from "@notic/agent-engine";
-
-const config = RequestConfig.create()
-  .temperature(0.3)
-  .topP(0.9)
-  .maxTokens(1024)
-  .stop("\n\nEND")
-  .seed(42);
-```
-
-传给 Agent：
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  config,
-});
-```
-
-### 预设
-
-```ts
-RequestConfig.precise();   // 低温度，偏稳定
-RequestConfig.balanced();  // 平衡
-RequestConfig.creative();  // 高温度，偏发散
-```
-
-### 自定义参数
-
-不同平台可能有额外字段，用 `set()`：
-
-```ts
-const config = RequestConfig.create()
-  .set("response_format", { type: "json_object" })
-  .set("parallel_tool_calls", false);
-```
-
-常用内置方法：
-
-```ts
-config.temperature(0.7);
-config.topP(0.95);
-config.topK(40);
-config.maxTokens(2048);
-config.frequencyPenalty(0.2);
-config.presencePenalty(0.2);
-config.stop("END");
-config.seed(123);
-config.responseFormat("json_object");
-config.unset("seed");
-```
-
-### 参数优先级
-
-一次 Agent 请求最终参数按这个顺序合并，后者覆盖前者：
-
-```text
-RequestConfig -> Agent.requestOptions -> agent.run(..., runOptions)
-```
-
-例子：
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  config: RequestConfig.create().temperature(0.2),
-  requestOptions: { temperature: 0.5 },
-});
-
-await agent.run("这一轮更发散一点", { temperature: 1.0 });
-```
-
-最终 `temperature` 是 `1.0`。
-
-### Config API 摘要
-
-| API | 说明 |
-| --- | --- |
-| `RequestConfig.create()` | 空配置 |
-| `precise()` / `balanced()` / `creative()` | 预设 |
-| `temperature(n)` | 温度，自动 clamp 到 0-2 |
-| `topP(n)` | top_p，自动 clamp 到 0-1 |
-| `topK(n)` | top_k，最小为 1 |
-| `maxTokens(n)` | max_tokens，最小为 1 |
-| `frequencyPenalty(n)` / `presencePenalty(n)` | 惩罚参数 |
-| `stop(...seq)` | 停止序列，最多保留 4 个 |
-| `seed(n)` | 随机种子 |
-| `responseFormat(format, schema?)` | 响应格式：`"text"` / `"json_object"` / `"json_schema"` |
-| `set(key, value)` | 自定义字段 |
-| `unset(key)` | 删除字段 |
-| `merge(other)` | 合并配置 |
-| `clone()` | 克隆 |
-| `build()` | 输出普通对象 |
-
-## Provider：平台能力组合
-
-Provider 是 AgentEngine 的平台边界。它不拥有 Agent 的 Session、工具循环或运行状态，
-只组合三个可以独立替换的组件：
-
-```text
-Provider
-├─ ModelClient          发送请求，返回 stream 或完整响应
-├─ MessageAdapter       Message[] <-> 平台请求/响应
-└─ MessageStreamParser  平台 stream -> 统一事件和 Message
-```
-
-因此接入新平台时，不需要在 `Agent` 中增加平台判断。只需提供对应的 Client、Adapter
-和 Parser，并保证最终仍然使用统一 `Message`。
-
-### OpenAI Compatible Provider
-
-适用于 OpenAI Chat Completions，以及 DeepSeek、Qwen、Kimi、GLM 等兼容接口：
-
-```ts
-import OpenAI from "openai";
-import {
-  Agent,
-  OpenAICompatibleProvider,
-  Session,
-} from "@notic/agent-engine";
-
-const client = new OpenAI({
-  apiKey: process.env.PROVIDER_API_KEY,
-  baseURL: "https://your-provider.example/v1",
-});
-
-const agent = new Agent({
-  provider: new OpenAICompatibleProvider(client),
-  model: "your-model",
-  session: Session.create(),
-});
-```
-
-为了兼容旧代码，也可以继续直接传 `client`。此时 Agent 默认使用
-`OpenAIAdapter + StreamParser`。
-
-### OpenAI Responses Provider
-
-```ts
-import OpenAI from "openai";
-import { Agent, OpenAIResponsesProvider, Session } from "@notic/agent-engine";
-
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const agent = new Agent({
-  provider: new OpenAIResponsesProvider(client),
-  model: "your-openai-model",
-  session: Session.create(),
-});
-```
-
-该 Provider 使用原生 Responses API，并支持：
-
-- `response.output_text.*` 文本事件
-- reasoning summary 与 encrypted reasoning item 回传
-- `function_call` / `function_call_output` 工具循环
-- `max_output_tokens`、结构化输出和 usage
-- 流式及非流式完整响应
-
-### Anthropic Provider
-
-```ts
-import Anthropic from "@anthropic-ai/sdk";
-import { Agent, AnthropicProvider, Session } from "@notic/agent-engine";
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const agent = new Agent({
-  provider: new AnthropicProvider(client),
-  model: "your-claude-model",
-  session: Session.create(),
-});
-```
-
-Anthropic Provider 使用原生 Messages API，处理 system 提取、content blocks、thinking
-signature、tool use 和原生 usage。
-
-### Gemini Provider
-
-```ts
-import { GoogleGenAI } from "@google/genai";
-import { Agent, GeminiProvider, Session } from "@notic/agent-engine";
-
-const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const agent = new Agent({
-  provider: new GeminiProvider(client),
-  model: "your-gemini-model",
-  session: Session.create(),
-});
-```
-
-Gemini Provider 使用 `generateContentStream()` 和 `generateContent()`，处理 contents、
-systemInstruction、functionCall、functionResponse 和 thought signature。
-
-### 流式与非流式
-
-内置 Provider 同时支持两种运行方式：
-
-```ts
-// 默认：增量事件
-const streamed = await agent.run("介绍一下这个项目");
-
-// 完整响应：不经过 StreamParser
-const completed = await agent.run("介绍一下这个项目", {
-  stream: false,
-});
-```
-
-非流式模式仍然经过统一 Adapter，并保留 Session、PromptBuilder、工具审批、工具执行、
-自动多轮循环、timeout、abort、model 和 usage。它不产生 `TEXT_DELTA`，但会产生
-`TEXT_DONE`、`TOOL_CALL_DONE` 和 `MESSAGE_DONE`。
-
-```ts
-provider.supportsComplete; // ModelClient 是否实现 complete()
-```
-
-### 自定义 Provider
-
-自定义 Client 只负责传输，不需要认识 Message、Session 或 Tool：
-
-```ts
-import {
-  Agent,
-  ModelClient,
-  Provider,
-  Session,
-} from "@notic/agent-engine";
-
-const client: ModelClient = {
-  async stream(request, options) {
-    return mySdk.createStream(request, { signal: options?.signal });
-  },
-  async complete(request, options) {
-    return mySdk.create(request, { signal: options?.signal });
-  },
-};
-
-const provider = Provider.create({
-  client,
-  adapter: new MyAdapter(),
-  parserFactory: () => new MyStreamParser(),
-});
-
-const agent = new Agent({
-  provider,
-  model: "my-model",
-  session: Session.create(),
-});
-```
-
-`ModelClient.complete()` 是可选能力。只实现 `stream()` 的自定义 Provider 仍然兼容，
-但调用 `{ stream: false }` 时会收到明确错误。显式传给 Agent 的 `client`、`adapter`
-或 `parserFactory` 会覆盖 Provider 中的对应预设。
-
-## Adapter：平台适配
-
-AgentEngine 内部统一使用 `Message`，但不同平台请求格式不同。`Adapter` 负责把 `Message[]` 转成平台格式，也可以把平台响应转回 `Message`。
-
-内置适配器：
-
-| 适配器 | 常见平台 |
-| --- | --- |
-| `OpenAIAdapter` | OpenAI、DeepSeek、Qwen、Kimi、GLM 等 OpenAI-compatible API |
-| `AnthropicAdapter` | Claude Messages API |
-| `GeminiAdapter` | Gemini |
-
-`Agent` 默认使用 `OpenAIAdapter`。
-
-### 手动指定适配器
-
-```ts
-import { Agent, OpenAIAdapter } from "@notic/agent-engine";
-
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  adapter: new OpenAIAdapter(),
-});
-```
-
-### 自定义 MediaResolver
-
-多模态消息里可能有本地文件、HTTP 文件或 data URI。Adapter 可以接收媒体解析器。根入口默认使用浏览器安全的 `BrowserMediaResolver`；Node.js 读取本地文件时使用显式子入口：
-
-```ts
-import { OpenAIAdapter } from "@notic/agent-engine";
-import { DefaultMediaResolver } from "@notic/agent-engine/node";
-
-const adapter = new OpenAIAdapter(new DefaultMediaResolver());
-```
-
-### 思考内容序列化
-
-AgentEngine 支持 thinking / reasoning 内容。序列化时可以控制是否回传给模型：
-
-```ts
-await agent.run("继续", {
-  serializeOptions: {
-    thinking: {
-      mode: "auto",
-      scope: "last",
-    },
-  },
-});
-```
-
-`mode`：
-
-- `none`：不序列化 thinking。
-- `native`：使用平台原生 thinking 字段。
-- `message`：把 thinking 放进文本消息。
-- `auto`：根据 adapter 能力自动选择。
-
-`scope`：
-
-- `none`：不包含。
-- `last`：只包含最后一条。
-- `tool_call`：工具调用相关场景包含。
-- `all`：全部包含。
-
-`include`（可选自定义选择器，优先级高于 `scope`）：
-
-```ts
-serializeOptions: {
-  thinking: {
-    mode: "message",
-    // 只回传包含工具调用的消息的 thinking
-    include: (msg, index) => msg.toolCalls.length > 0,
-  },
-},
-```
-
-`messagePrefix`（可选，`message` 降级模式下的提示前缀，默认带有恢复语义）：
-
-```ts
-serializeOptions: {
-  thinking: {
-    mode: "message",
-    messagePrefix: "[先前上下文]\n",
-  },
-},
-```
-
-DeepSeek / Qwen 等模型如果要求工具调用时回传 reasoning 内容，可以在 `run()` 时显式设置。
-
-## Media：媒体解析
-
-`MediaResolver` 用来把图片、音频、文件 URL 转成模型平台需要的 base64 / MIME 信息。
-
-接口：
-
-```ts
-interface MediaResolver {
-  resolve(url: string): Promise<{
-    mimeType: string;
-    base64: string;
-  }>;
-}
-```
-
-浏览器默认实现：
-
-```ts
-import { BrowserMediaResolver } from "@notic/agent-engine";
-
-const resolver = new BrowserMediaResolver();
-const file = await resolver.resolve("https://example.com/image.png");
-```
-
-`BrowserMediaResolver` 支持：
-
-- `data:` URI
-- HTTP / HTTPS URL
-- `blob:` URL
-
-Node.js 本地文件解析器：
-
-```ts
-import { DefaultMediaResolver } from "@notic/agent-engine/node";
-
-const resolver = new DefaultMediaResolver();
-const file = await resolver.resolve("./image.png");
-```
-
-`DefaultMediaResolver` 额外支持：
-
-- 本地文件路径
-
-无法识别 MIME 时，会退回到 `application/octet-stream`。
-
-## Agent：智能体编排
-
-`Agent` 是最常用入口。它把 `Session`、`Adapter`、`StreamParser`、`ToolKit`、`PromptBuilder` 和 `RequestConfig` 串起来。
-
-### 创建 Agent
-
-```ts
-import OpenAI from "openai";
-import { Agent, RequestConfig, Session } from "@notic/agent-engine";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const agent = new Agent({
-  client,
-  model: "gpt-4o-mini",
-  session: Session.create("你是一个可靠的助手。"),
-  config: RequestConfig.create().temperature(0.3).maxTokens(1024),
-  maxTurns: 8,
-});
-```
-
-`client` 只需要满足这个最小接口：
-
-```ts
-interface OpenAIClientLike {
-  chat: {
-    completions: {
-      create(params: any, options?: any): Promise<any>;
-    };
+builder.use(messages => {
+  const rule = Message.system("世界书规则");
+  return {
+    messages: [rule, ...messages],
+    sources: [{ messageId: rule.id, injected: true, source: "世界书: 城市" }],
   };
-}
-```
-
-这意味着你可以传官方 `openai` SDK，也可以传自己的兼容客户端。
-
-### 运行
-
-```ts
-const reply = await agent.run("帮我写一个提交说明。");
-console.log(reply.text);
-```
-
-默认使用流式请求。需要等待一次完整响应时，设置 `stream: false`：
-
-```ts
-const reply = await agent.run("直接返回完整结果", {
-  stream: false,
-});
-
-console.log(reply.text);
-console.log(reply.usage);
-```
-
-非流式模式仍然支持 Session 写入、工具自动循环、工具审批、超时和中断。
-它不会产生 `TEXT_DELTA` 等增量事件，但会产生 `TEXT_DONE`、`TOOL_CALL_DONE`
-和 `MESSAGE_DONE` 等完成事件。
-
-内置 Provider 都支持非流式请求。自定义 Provider 可以通过
-`provider.supportsComplete` 检查其 `ModelClient` 是否实现了 `complete()`。
-
-传入已构建的消息：
-
-```ts
-const input = Message.user("这条消息带标签").tag("task");
-const reply = await agent.runWith(input);
-```
-
-当前 `Session` 已经准备好上下文时，直接生成 Assistant，不追加 User 消息：
-
-```ts
-session.addUser("预先构建的上下文");
-const reply = await agent.generate();
-```
-
-不写入 `Session`，直接跑一次 raw 请求：
-
-```ts
-const reply = await agent.runRaw([
-  Message.system("你是一个 JSON 助手。"),
-  Message.user("输出 {\"ok\":true}"),
-], { stream: false });
-```
-
-### 监听事件
-
-```ts
-agent
-  .on(StreamEventType.TEXT_DELTA, (event) => {
-    process.stdout.write(event.delta);
-  })
-  // 批量注册：同一个 handler 响应多个事件类型
-  .on(
-    [StreamEventType.TOOL_CALL_START, StreamEventType.TOOL_CALL_DONE],
-    (event) => console.log("tool event:", event.type, event.name)
-  )
-  .on(StreamEventType.TOOL_EXECUTE_START, (event) => {
-    console.log("tool start:", event.name);
-  })
-  .on(StreamEventType.TOOL_EXECUTE_DONE, (event) => {
-    console.log("tool done:", event.name, event.result.text);
-  })
-  .on(StreamEventType.ERROR, (event) => {
-    console.error(event.error);
-  });
-```
-
-也支持自定义事件类型：
-
-```ts
-agent.on("my_custom_event", (event) => {
-  console.log(event.data);
 });
 ```
 
-事件 handler 抛错默认会打印到 `console.error`，但不会中断 Agent。可以自定义处理器：
-
-```ts
-agent.setHandlerErrorHandler((error, event) => {
-  logger.warn({ error, event }, "Agent event handler failed");
-});
-```
-
-普通 `emit()` 事件仍是非阻塞通知，异步 handler 失败只会上报。提交前转换使用可等待的生命周期：
-
-```ts
-agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, async (event) => {
-  event.message.setText(await transformText(event.message.text));
-});
-```
-
-该事件位于 `MESSAGE_DONE` 之后、Session 写入之前。监听器按注册顺序执行；失败会中止本轮提交，避免保存未转换文本。自定义流程也可以显式调用 `await agent.emitAsync(event)` 获得相同的等待和错误传播语义。
-
-### 请求级参数
-
-```ts
-await agent.run("这一轮限制更短", {
-  temperature: 0,
-  max_tokens: 128,
-  timeoutMs: 30_000,
-});
-```
-
-`AgentRunOptions` 中的特殊字段不会发送给模型：
-
-- `signal`
-- `timeoutMs`
-- `promptBuildOptions`
-- `serializeOptions`
-- `stream`
-
-其他字段会作为模型请求参数合并进去。
-
-### 动态更新配置
-
-```ts
-agent.setModel("another-model");
-agent.setMaxTurns(12);
-agent.setConfig(RequestConfig.precise());
-agent.setRequestOptions({ temperature: 0.1 });
-agent.setPromptBuilder(builder);
-agent.setToolErrorPolicy("pause");
-agent.setToolApproval(customApprovalHandler);
-agent.setToolApprovalMode("manual");
-```
-
-常用 getter：
-
-```ts
-agent.model;
-agent.session;
-agent.config;
-agent.promptBuilder;
-agent.toolApproval;
-agent.toolErrorPolicy;
-agent.lastRunState;
-agent.canResume;
-agent.canContinue;
-agent.isRunning;
-agent.pendingApprovals;
-```
-
-### 工具审批
-
-默认是自动批准工具调用。如果你想自己判断：
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  toolkit,
-  toolApproval: async (request) => {
-    if (request.name === "delete_file") {
-      return { approved: false, reason: "危险操作需要人工确认" };
-    }
-    return true;
-  },
-});
-```
-
-审批请求结构：
-
-```ts
-interface ToolApprovalRequest {
-  approvalId: string;
-  toolCallId: string;
-  name: string;
-  arguments: Record<string, unknown>;
-  rawArguments: string;
-  turn: number;
-}
-```
-
-### 手动审批模式
-
-如果你要把审批交给 UI：
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  toolkit,
-  toolApprovalMode: "manual",
-  toolApprovalTimeoutMs: 60_000,
-});
-
-const run = agent.run("执行需要审批的任务");
-
-// UI 轮询或订阅 pendingApprovals
-const [approval] = agent.pendingApprovals;
-agent.approve(approval.approvalId);
-// 或 agent.reject(approval.approvalId, "用户拒绝");
-
-await run;
-```
-
-也可以监听 `TOOL_APPROVAL_REQUIRED`：
-
-```ts
-agent.on(StreamEventType.TOOL_APPROVAL_REQUIRED, (event) => {
-  showApprovalDialog(event);
-});
-```
-
-超时策略：
-
-- `toolApprovalTimeoutPolicy: "reject"`：超时后拒绝工具调用。
-- `toolApprovalTimeoutPolicy: "abort"`：超时后中断本次运行。
-
-### 工具错误策略
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  toolkit,
-  toolErrorPolicy: "return_to_model",
-});
-```
-
-策略：
-
-- `return_to_model`：默认。工具异常变成 tool result，让模型自己解释或重试。
-- `pause`：写入带 `paused: true` 的 tool result，Agent 进入可恢复失败状态。
-- `throw`：直接抛出错误，不写入可恢复状态。
-
-### 中断、继续与恢复
-
-中断当前运行：
-
-```ts
-agent.abort("用户取消");
-```
-
-用外部 `AbortSignal`：
-
-```ts
-const controller = new AbortController();
-
-await agent.run("长任务", {
-  signal: controller.signal,
-});
-```
-
-超时：
-
-```ts
-await agent.run("最多等 10 秒", { timeoutMs: 10_000 });
-```
-
-如果中断时已经有部分内容，Agent 会把 partial assistant message 写入 session，并设置 `canResume`：
-
-```ts
-if (agent.canResume) {
-  await agent.resume();
-}
-```
-
-普通继续：
-
-```ts
-if (agent.canContinue) {
-  await agent.continue({
-    // mode: "auto" | "resume" | "continue"
-    // auto=有中断则恢复，否则普通继续；resume=严格恢复；continue=普通继续
-    mode: "auto",
-    // 继续时追加的提示词
-    prompt: "请继续上一条回答，不要重复已经说过的内容。",
-    // thinking 回传策略；resume 默认 auto，普通 continue 默认 none
-    thinkingMode: "auto",
-    // 也支持 AgentRunOptions 中的常用字段
-    signal: controller.signal,
-    timeoutMs: 30_000,
-  });
-}
-```
-
-### 运行状态
-
-```ts
-const state = agent.lastRunState;
-
-state?.status;      // "running" | "completed" | "interrupted" | "failed"
-state?.stopReason;  // "final" | "timeout" | "abort" | "tool_execution_error" ...
-state?.turn;        // 当前轮次
-state?.canResume;   // 是否可恢复
-state?.lastMessage; // 最近完成的消息
-state?.partialMessage; // 部分消息
-state?.error;       // 错误对象
-```
-
-常见 `stopReason`：
-
-| stopReason | 含义 |
-| --- | --- |
-| `final` | 正常完成 |
-| `continue` | 通过 `agent.continue()` 继续 |
-| `abort` | 主动中断 |
-| `timeout` | 超时 |
-| `network_error` | 网络或 API 请求失败 |
-| `stream_error` | 流式解析或读取失败 |
-| `tool_approval_rejected` | 工具审批被拒绝 |
-| `tool_approval_error` | 工具审批函数执行失败 |
-| `tool_execution_error` | 工具执行失败 |
-| `max_tokens` | 模型输出达到 token 限制 |
-| `max_turns` | 工具循环超过最大轮数 |
-| `unknown_error` | 未分类错误 |
-
-### AgentOptions 摘要
-
-| 字段 | 说明 |
-| --- | --- |
-| `client?` | 模型客户端，`OpenAIClientLike` 或自定义 `ModelClient`，与 `provider` 二选一 |
-| `provider?` | Client + Adapter + Parser 的预设组合，与 `client` 二选一 |
-| `model` | 模型名 |
-| `session` | 会话 |
-| `adapter?` | 消息适配器，默认 `OpenAIAdapter` |
-| `parserFactory?` | 自定义 Parser 工厂，会覆盖 Provider 中的预设 |
-| `toolkit?` | 工具包 |
-| `toolApproval?` | 自定义工具审批函数 |
-| `toolApprovalMode?` | `"auto"` 或 `"manual"` |
-| `toolApprovalTimeoutMs?` | 手动审批超时（毫秒） |
-| `toolApprovalTimeoutPolicy?` | 手动审批超时策略：`"reject"`（默认）或 `"abort"` |
-| `toolErrorPolicy?` | `"return_to_model"` / `"pause"` / `"throw"` |
-| `maxTurns?` | 最大自动循环轮数，默认 10 |
-| `promptBuilder?` | 提示词构建器 |
-| `config?` | 请求参数配置 |
-| `requestOptions?` | 额外请求参数 |
-
-## Utils：工具函数
-
-### generateId
-
-```ts
-import { generateId } from "@notic/agent-engine";
-
-generateId();        // 类似 "l3k..."
-generateId("msg");   // 类似 "msg-l3k..."
-```
-
-它用于生成轻量 ID，不保证密码学安全。
-
-## 常见组合方案
-
-### 方案一：只做聊天
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session: Session.create("你是一个中文助手。"),
-});
-
-const reply = await agent.run("你好");
-```
-
-### 方案二：聊天 + 工具
-
-```ts
-const toolkit = new ToolKit().add(getWeather, searchDocs);
-
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session: Session.create("需要外部信息时请调用工具。"),
-  toolkit,
-});
-
-await agent.run("今天北京适合跑步吗？");
-```
-
-### 方案三：聊天 + 动态提示词
-
-```ts
-const promptBuilder = new PromptBuilder()
-  .injectSystem(Rule.top().after(), "当前产品版本：1.1.x")
-  .slice(-30);
-
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  promptBuilder,
-});
-```
-
-### 方案四：人工审批危险工具
-
-```ts
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session,
-  toolkit,
-  toolApproval: (request) => {
-    if (request.name.startsWith("delete_")) {
-      return { approved: false, reason: "禁止删除操作" };
-    }
-    return true;
-  },
-});
-```
-
-### 方案五：真实 API 测试
-
-项目内建议把真实 API 测试和 fake 测试分开：
-
-```bash
-npm test
-```
-
-默认只跑本地 fake / 单元测试。真实 API 测试可以使用显式开关：
-
-```bash
-RUN_REAL_DEEPSEEK_TESTS=1 DEEPSEEK_API_KEY=sk-... npm run test:real:deepseek
-```
-
-这样 CI、开发机和发布前验证都不会误触发真实请求。
+来源是部分声明，不必为每条消息重复填写；后续返回普通数组的变换只要保留 messageId 就保留标签。sourceMessageId 可关联原历史，sourceRevision 未指定时从原输入推导。buildContext/preview 也接受 `{sources}` 输入标签。声明必须指向本次输出中的消息，重复或无效引用会拒绝构建，并且不消费 life。

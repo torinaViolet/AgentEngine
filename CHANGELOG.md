@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.0.0 - 2026-10-26
+
+- CE feedback: business Message metadata/tags and Session metadata can change during runs without invalidating request leases; content and protocol edits still conflict. Custom request metadata keys persist alongside separate request revisions.
+- Continuation temporary messages now enter PromptBuilder before transforms, with tags/source labels and matching continuation previews. Default merges retain business metadata/tags; awaited beforeAppend hooks edit detached merged targets without overwriting unrelated concurrent annotations.
+- Tool-related continuation thinking is stored once with its native signatures; independent thinking blocks remain available for display.
+- Version 3 session structures are publicly typed. Flat tree imports preserve external message/node IDs, explicit root/sibling order and selection.
+- Prompt transforms can return messages with source descriptors while retaining Message[] compatibility. Transport requests include explicit stream and purpose; Generator/Agent thinking defaults accept per-call overrides.
+- Added EmbeddingProvider capability contract for inheritable custom providers; no built-in vendor embedding protocol yet. Added 16 CE feedback regression cases and documented the integration contract in docs/CE-FEEDBACK-3.0.md.
+- Provider is now an inheritable HTTP base; ChatProvider remains a structural chat capability. Separate ImageProvider, AudioProvider and VideoProvider contracts support media outputs without requiring chat.
+- Shared subclass hooks handle authentication, JSON/multipart/binary requests, GET task queries, SSE and bounded binary reading. Video submission/query/optional remote cancellation are distinct operations.
+- VideoPart and Message.addVideo support video persistence in all session types; chat subclasses can extend serializeMessages, while unsupported built-in video input fails explicitly.
+
+- New independent editable Message model with content-block IDs, revisions and flat serialization.
+- TreeSession, sequence/turn ListSession, and interaction-based AgentSession share querying and Turn/Run/Step/tool execution records.
+- SDK-free HTTP providers for OpenAI compatible, OpenAI Responses, Anthropic and Gemini, with injectable transport/media and SSE cancellation.
+- Generator performs a single model request; Agent orchestrates chat/run/continue/resume and contextual tool loops.
+- Standalone ToolExecutor validates JSON Schema and handles authorization, manual approval, timeout and cancellation; tool availability is dynamic.
+- Independent async PromptBuilder provides detached contexts, source tracking and non-consuming previews.
+- Awaited commit hooks, continuation merging, generation contribution/usage tracking, partial progress retention and session edit conflict detection.
+- Breaking: root/subpath APIs and session storage format are 3.0. The 2.x implementation remains available through explicit `/legacy` imports; existing demos use this compatibility entry.
+- Vendor SDKs are no longer runtime/peer dependencies; Ajv provides tool validation. Browser and explicit Node media entries remain separate.
+- See docs/API.md and docs/MIGRATION-3.0.md. CharacterEditor and live model integration are not migrated by this release work.
+
 ## 2.2.0 - 2026-09-07
 
 ### Added

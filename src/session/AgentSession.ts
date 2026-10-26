@@ -1,13 +1,25 @@
-import { Message } from "../message/Message";
-
-/** The conversation operations required by Agent. Tree-specific APIs remain on Session. */
-export interface AgentSession {
-  readonly cursor: Message;
-  history(includeRoot?: boolean): Message[];
-  addMessage(message: Message): Message;
-  addAssistant(message: Message): Message;
-  addTool(messages: Message[]): void;
-  /** Optional execution boundary: a tool loop belongs to one reply candidate. */
-  beginGeneration?(): void;
-  endGeneration?(): void;
+import type { SessionData, AgentSessionData } from "./types";
+import { ListSession } from './ListSession';
+export class AgentSession extends ListSession {
+    readonly type = "agent" as const;
+    constructor(options: {
+        systemPrompt?: string;
+        id?: string;
+    } = {}) {
+        super({ ...options, candidateUnit: "turn" });
+    }
+    static create(options: {
+        systemPrompt?: string;
+    } = {}): AgentSession {
+        return new AgentSession(options);
+    }
+    get turns() {
+        return this.query.turns();
+    }
+    toJSON(): AgentSessionData { return super.toJSON() as AgentSessionData; }
+    static fromJSON(data: SessionData): AgentSession {
+        const session = new AgentSession({ id: data.id });
+        session.load(data);
+        return session;
+    }
 }

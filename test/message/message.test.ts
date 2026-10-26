@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Message, Role, Usage, type MessagePart } from "../../src/message";
+import { Message, Role, Usage, type MessagePart } from "../../src/legacy/message";
 
 describe("Message", () => {
   it("creates messages with the expected roles and text content", () => {

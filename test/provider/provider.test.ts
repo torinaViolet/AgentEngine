@@ -1,23 +1,23 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { MessageAdapter } from "../../src/adapter";
-import { Agent } from "../../src/agent";
-import { ModelClient } from "../../src/client";
-import { Message, Role } from "../../src/message";
+import { MessageAdapter } from "../../src/legacy/adapter";
+import { Agent } from "../../src/legacy/agent";
+import { ModelClient } from "../../src/legacy/client";
+import { Message, Role } from "../../src/legacy/message";
 import {
   AnthropicProvider,
   GeminiProvider,
   OpenAICompatibleProvider,
   OpenAIResponsesProvider,
   Provider,
-} from "../../src/provider";
+} from "../../src/legacy/provider";
 import {
   MessageStreamParser,
   StreamEvent,
   StreamParser,
-} from "../../src/stream";
-import { Session } from "../../src/session";
-import { Param, Tool, ToolKit } from "../../src/tool";
+} from "../../src/legacy/stream";
+import { Session } from "../../src/legacy/session";
+import { Param, Tool, ToolKit } from "../../src/legacy/tool";
 
 class RecordingClient implements ModelClient {
   readonly requests: Record<string, unknown>[] = [];

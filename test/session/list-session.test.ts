@@ -1,8 +1,8 @@
 import {describe,it} from 'node:test';
 import assert from 'node:assert/strict';
-import {ListSession,Session} from '../../src/session';
-import {Message} from '../../src/message';
-import {Agent} from '../../src/agent';
+import {ListSession,Session} from '../../src/legacy/session';
+import {Message} from '../../src/legacy/message';
+import {Agent} from '../../src/legacy/agent';
 
 describe('ListSession',()=>{
  it('selects alternatives without erasing later rows and rejects stale generation',()=>{

@@ -1,13 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Role } from "../../src/message";
+import { Role } from "../../src/legacy/message";
 import {
   AnthropicStreamParser,
   GeminiStreamParser,
   OpenAIResponsesStreamParser,
   StreamEvent,
   StreamEventType,
-} from "../../src/stream";
+} from "../../src/legacy/stream";
 
 function finalMessage(events: StreamEvent[]) {
   const done = events.find((event) => event.type === StreamEventType.MESSAGE_DONE);

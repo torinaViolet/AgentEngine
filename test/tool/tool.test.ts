@@ -10,7 +10,7 @@ import {
   ToolKit,
   ValueType,
   type McpClientLike,
-} from "../../src/tool";
+} from "../../src/legacy/tool";
 
 describe("Param", () => {
   it("builds primitive parameter schemas", () => {

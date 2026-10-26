@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Message, Role } from "../../src/message";
-import { Injection, PromptBuilder, Rule } from "../../src/prompt";
-import { MatchMode } from "../../src/session";
+import { Message, Role } from "../../src/legacy/message";
+import { Injection, PromptBuilder, Rule } from "../../src/legacy/prompt";
+import { MatchMode } from "../../src/legacy/session";
 
 function fixtureHistory(): Message[] {
   return [

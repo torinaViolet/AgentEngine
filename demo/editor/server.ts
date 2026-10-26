@@ -7,7 +7,7 @@ import {
   RequestConfig, StreamEventType, Message,
   ThinkingDeltaEvent, ThinkingDoneEvent,
   TextDeltaEvent, ToolCallStartEvent, ToolCallDeltaEvent, ToolCallDoneEvent,
-} from "../../src";
+} from "../../src/legacy";
 
 const PORT = 3001;
 

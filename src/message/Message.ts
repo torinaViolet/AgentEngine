@@ -1,508 +1,249 @@
+import { assert, assertJson, copy, id, immutable } from "../core/data";
+export { Role } from "./Role";
 import { Role } from "./Role";
-import { Usage } from "./Usage";
-import {
-  MessagePart,
-  TextPart,
-  ImagePart,
-  AudioPart,
-  FilePart,
-  ToolCallPart,
-  ToolResultPart,
-  ThinkingPart,
-} from "./MessagePart";
-
-/**
- * 统一消息模型
- *
- * 支持多模态内容（文本/图片/音频/文件/工具调用），
- * 树结构管理（parent/children），标签系统，token统计。
- * 通过链式 API 构建，通过 Adapter 序列化为各平台格式。
- */
+import type { MessagePart as ProtocolPart } from "./MessagePart";
+export type MessagePart = ProtocolPart & {
+    id?: string;
+};
+export type { TextPart, ThinkingPart, ImagePart, AudioPart, VideoPart, FilePart, ToolCallPart, ToolResultPart } from "./MessagePart";
+export type MessageContent = string | readonly MessagePart[];
+export interface MessageData {
+    id: string;
+    revision: number;
+    requestRevision?: number;
+    requestMetadataKeys?: string[];
+    role: Role;
+    parts: MessagePart[];
+    metadata: Record<string, unknown>;
+    tags: string[];
+}
+/** Metadata consumed by the built-in wire codecs, rather than business state. */
+export const PROTOCOL_METADATA_KEYS = ["thinkingSignature", "geminiThinkingSignature", "openaiReasoningItems", "toolName", "name"] as const;
+export interface MessageUpdate {
+    parts?: MessageContent;
+    metadata?: Record<string, unknown>;
+    tags?: readonly string[];
+    requestMetadataKeys?: readonly string[];
+}
+export interface MessageChange {
+    message: Message;
+    revision: number;
+}
+/** An editable content object. It has no parents, children or session ownership. */
 export class Message {
-  public readonly role: Role;
-  public readonly parts: MessagePart[];
-  public readonly metadata: Record<string, unknown>;
-
-  // === 模型 & 用量 ===
-  public model?: string;
-  public usage?: Usage;
-
-  // === 标签系统 ===
-  public readonly tags: Set<string> = new Set();
-
-  // === 树结构 ===
-  public parent?: Message;
-  public readonly children: Message[] = [];
-
-  // === Getter 缓存（懒计算，parts 变更时通过 addX 方法失效；
-  //     如直接 push parts，请手动调用 invalidateCache()） ===
-  private _textCache?: string;
-  private _thinkingCache?: string;
-  private _toolCallsCache?: ToolCallPart[];
-  private _hasMediaCache?: boolean;
-  private _hasThinkingCache?: boolean;
-
-  constructor(
-    role: Role,
-    parts: MessagePart[] = [],
-    metadata: Record<string, unknown> = {}
-  ) {
-    this.role = role;
-    this.parts = parts;
-    this.metadata = metadata;
-  }
-
-  // ========================
-  //  静态工厂方法
-  // ========================
-
-  /**
-   * 创建 User 消息
-   * @param content 字符串、单个Part、或Part数组
-   */
-  static user(content: string | MessagePart | MessagePart[]): Message {
-    return new Message(Role.User, Message.normalizeParts(content));
-  }
-
-  /**
-   * 创建 Assistant 消息
-   */
-  static assistant(content: string | MessagePart | MessagePart[]): Message {
-    return new Message(Role.Assistant, Message.normalizeParts(content));
-  }
-
-  /**
-   * 创建 System 消息
-   */
-  static system(content: string): Message {
-    return new Message(Role.System, [{ type: "text", text: content }]);
-  }
-
-  /**
-   * 创建空System 消息（用作树的永恒根节点）
-   */
-  static emptySystem(): Message {
-    return new Message(Role.System, []);
-  }
-
-  /**
-   * 创建 Tool Result 消息
-   */
-  static tool(toolCallId: string, result: string, name?: string): Message {
-    return new Message(Role.Tool, [
-      { type: "tool_result", toolCallId, result, ...(name ? { name } : {}) },
-    ], name ? { toolName: name } : {});
-  }
-
-  /**
-   * 创建 Assistant 发起的工具调用消息
-   */
-  static assistantToolCalls(
-    toolCalls: { id: string; name: string; arguments: string }[]
-  ): Message {
-    const parts: ToolCallPart[] = toolCalls.map((tc) => ({
-      type: "tool_call" as const,
-      toolCallId: tc.id,
-      name: tc.name,
-      arguments: tc.arguments,
-    }));
-    return new Message(Role.Assistant, parts);
-  }
-
-  // ========================
-  //  链式构建方法
-  // ========================
-
-  addText(text: string): this {
-    this.parts.push({ type: "text", text });
-    return this.invalidateCache();
-  }
-
-  addImage(url: string, mimeType?: string): this {
-    const part: ImagePart = { type: "image", url };
-    if (mimeType) part.mimeType = mimeType;
-    this.parts.push(part);
-    return this.invalidateCache();
-  }
-
-  addAudio(url: string, mimeType?: string): this {
-    const part: AudioPart = { type: "audio", url };
-    if (mimeType) part.mimeType = mimeType;
-    this.parts.push(part);
-    return this.invalidateCache();
-  }
-
-  addFile(
-    url: string,
-    options?: { mimeType?: string; fileName?: string }
-  ): this {
-    const part: FilePart = { type: "file", url };
-    if (options?.mimeType) part.mimeType = options.mimeType;
-    if (options?.fileName) part.fileName = options.fileName;
-    this.parts.push(part);
-    return this.invalidateCache();
-  }
-
-  /** 替换消息的全部内容，并自动失效 getter 缓存。 */
-  setParts(content: string | MessagePart | MessagePart[]): this {
-    const parts = Message.normalizeParts(content);
-    this.parts.splice(0, this.parts.length, ...parts);
-    return this.invalidateCache();
-  }
-
-  /**
-   * 替换消息中的全部文本，同时保留 thinking、媒体和工具调用等非文本 part。
-   * 多个 TextPart 会合并为一个；空字符串会移除全部 TextPart。
-   */
-  setText(text: string): this {
-    const firstTextIndex = this.parts.findIndex((part) => part.type === "text");
-
-    if (firstTextIndex === -1) {
-      if (text) this.parts.push({ type: "text", text });
-      return this.invalidateCache();
+    readonly id: string;
+    readonly role: Role;
+    private version: number;
+    private requestVersion: number;
+    private requestKeys: Set<string>;
+    private content: MessagePart[];
+    private meta: Record<string, unknown>;
+    private labels: string[];
+    private observers = new Set<(event: MessageChange) => void>();
+    constructor(role: Role, content: MessageContent = "", metadata: Record<string, unknown> = {}, identity?: {
+        id: string;
+        revision?: number;
+        requestRevision?: number;
+        requestMetadataKeys?: string[];
+        tags?: string[];
+    }) {
+        assert(Object.values(Role).includes(role), "Invalid message role");
+        this.id = identity?.id ?? id("msg");
+        this.version = identity?.revision ?? 0;
+        this.requestVersion = identity?.requestRevision ?? this.version;
+        assert(Number.isSafeInteger(this.requestVersion) && this.requestVersion >= 0 && this.requestVersion <= this.version, "Invalid request revision");
+        assert((identity?.requestMetadataKeys ?? []).every(key => typeof key === "string"), "Invalid request metadata keys");
+        this.requestKeys = new Set([...PROTOCOL_METADATA_KEYS, ...identity?.requestMetadataKeys ?? []]);
+        assert(typeof this.id === "string" && this.id && Number.isSafeInteger(this.version) && this.version >= 0, "Invalid message identity");
+        assert(metadata && typeof metadata === "object" && !Array.isArray(metadata), "Invalid message metadata");
+        assertJson(metadata);
+        assert((identity?.tags ?? []).every(tag => typeof tag === "string"), "Invalid message tags");
+        this.role = role;
+        this.content = this.normalize(content);
+        this.meta = immutable(copy(metadata));
+        this.labels = immutable([...new Set(identity?.tags ?? [])]);
     }
-
-    const nextParts: MessagePart[] = [];
-    let inserted = false;
-    for (const part of this.parts) {
-      if (part.type !== "text") {
-        nextParts.push(part);
-        continue;
-      }
-      if (!inserted && text) {
-        nextParts.push({ type: "text", text });
-        inserted = true;
-      }
+    static user(content: MessageContent): Message {
+        return new Message(Role.User, content);
     }
-
-    this.parts.splice(0, this.parts.length, ...nextParts);
-    return this.invalidateCache();
-  }
-
-  setMeta(key: string, value: unknown): this {
-    this.metadata[key] = value;
-    return this;
-  }
-
-  // ========================
-  //  标签系统
-  // ========================
-
-  /** 添加标签（链式） */
-  tag(...tagNames: string[]): this {
-    for (const t of tagNames) {
-      this.tags.add(t);
+    static assistant(content: MessageContent = ""): Message {
+        return new Message(Role.Assistant, content);
     }
-    return this;
-  }
-
-  /** 移除标签（链式） */
-  untag(...tagNames: string[]): this {
-    for (const t of tagNames) {
-      this.tags.delete(t);
+    static system(content: MessageContent = ""): Message {
+        return new Message(Role.System, content);
     }
-    return this;
-  }
-
-  /** 是否有某标签 */
-  hasTag(tagName: string): boolean {
-    return this.tags.has(tagName);
-  }
-
-  // ========================
-  //  树结构操作
-  // ========================
-
-  /**
-   * 追加子节点，设置 parent 关系，返回 child
-   */
-  append(child: Message): Message {
-    if (child === this) {
-      throw new Error("消息不能追加到自身");
+    static tool(toolCallId: string, result: unknown, name?: string): Message {
+        return new Message(Role.Tool, [{ type: "tool_result", toolCallId, name, result: typeof result === "string" ? result : JSON.stringify(result ?? null) }]);
     }
-
-    let ancestor: Message | undefined = this;
-    while (ancestor) {
-      if (ancestor === child) {
-        throw new Error("不能将祖先消息追加为子节点");
-      }
-      ancestor = ancestor.parent;
+    get revision(): number {
+        return this.version;
     }
-
-    if (child.parent === this && this.children.includes(child)) {
-      return child;
+    get requestRevision(): number { return this.requestVersion; }
+    get requestMetadataKeys(): readonly string[] { return immutable([...this.requestKeys]); }
+    get parts(): readonly MessagePart[] {
+        return this.content;
     }
-
-    if (child.parent) {
-      const previousParent = child.parent;
-      const previousIndex = previousParent.children.indexOf(child);
-      if (previousIndex !== -1) {
-        previousParent.children.splice(previousIndex, 1);
-      }
+    get metadata(): Readonly<Record<string, unknown>> {
+        return this.meta;
     }
-
-    child.parent = this;
-    this.children.push(child);
-    return child;
-  }
-
-  /**
-   * 删除自身节点
-   *
-   * @param mode
-   * - "prune": 剪枝 — 删除自身及所有后代
-   * - "graft": 嫁接 — 删除自身，子节点继承父节点
-   *
-   * 根节点不可删除，尝试删除会抛异常
-   */
-  remove(mode: "prune" | "graft"): void {
-    if (this.isRoot) {
-      throw new Error("根节点不可删除");
+    get tags(): readonly string[] {
+        return this.labels;
     }
-
-    const parent = this.parent!;
-    const index = parent.children.indexOf(this);
-    if (index === -1) return;
-
-    if (mode === "prune") {
-      // 剪枝：从父节点移除自身（含所有后代）
-      parent.children.splice(index, 1);
-      this.parent = undefined;
-    } else {
-      // 嫁接：子节点继承父节点
-      const children = [...this.children];
-      for (const child of children) {
-        child.parent = parent;
-      }
-      parent.children.splice(index, 1, ...children);
-      this.children.length = 0;
-      this.parent = undefined;
+    get text(): string {
+        return this.content.map(p => p.type === "text" ? p.text : p.type === "tool_result" ? p.result : "").join("");
     }
-  }
-
-  /**溯源到根节点 */
-  get root(): Message {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    let node: Message = this;
-    while (node.parent) {
-      node = node.parent;
+    get thinking(): string {
+        return this.content.filter(p => p.type === "thinking").map(p => p.text).join("");
     }
-    return node;
-  }
-
-  /** 在树中的深度（根节点为 0） */
-  get depth(): number {
-    let d = 0;
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    let node: Message = this;
-    while (node.parent) {
-      d++;
-      node = node.parent;
+    get toolCalls(): readonly Extract<MessagePart, {
+        type: "tool_call";
+    }>[] {
+        return this.content.filter(p => p.type === "tool_call");
     }
-    return d;
-  }
-
-  /** 是否根节点（没有 parent） */
-  get isRoot(): boolean {
-    return !this.parent;
-  }
-
-  /** 是否叶子节点 */
-  get isLeaf(): boolean {
-    return this.children.length === 0;
-  }
-
-  /** 最后一个子节点 */
-  get lastChild(): Message | undefined {
-    return this.children.length > 0
-      ? this.children[this.children.length - 1]
-      : undefined;
-  }
-
-  /**
-   * 从根节点到当前节点的完整路径
-   *
-   * @param includeRoot 是否包含根节点，默认 true。
-   */
-  getHistory(includeRoot: boolean = true): Message[] {
-    const path: Message[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    let node: Message = this;
-    while (node) {
-      path.unshift(node);
-      node = node.parent!;
+    get isEmpty(): boolean {
+        return !this.content.some(p => p.type === "text" || p.type === "thinking" ? p.text.trim() : true);
     }
-    if (!includeRoot && path.length > 0 && path[0].isRoot) {
-      path.shift();
+    get hasMedia(): boolean {
+        return this.content.some(p => ["image", "audio", "video", "file"].includes(p.type));
     }
-    return path;
-  }
-
-  // ========================
-  //  便捷 Getter（带懒缓存）
-  // ========================
-
-  /** 获取消息的文本内容（拼接所有 TextPart + ToolResultPart） */
-  get text(): string {
-    if (this._textCache !== undefined) return this._textCache;
-    let result = "";
-    for (const p of this.parts) {
-      if (p.type === "text") result += p.text;
-      else if (p.type === "tool_result") result += p.result;
+    onChange(handler: (event: MessageChange) => void): () => void {
+        this.observers.add(handler);
+        return () => this.observers.delete(handler);
     }
-    this._textCache = result;
-    return result;
-  }
-
-  /** 获取所有 ToolCallPart */
-  get toolCalls(): ToolCallPart[] {
-    if (this._toolCallsCache !== undefined) return this._toolCallsCache;
-    const result: ToolCallPart[] = [];
-    for (const p of this.parts) {
-      if (p.type === "tool_call") result.push(p);
+    setParts(content: MessageContent): this {
+        this.content = this.normalize(content);
+        return this.changed(true);
     }
-    this._toolCallsCache = result;
-    return result;
-  }
-
-  /** 获取思考/推理内容（拼接所有 ThinkingPart） */
-  get thinking(): string {
-    if (this._thinkingCache !== undefined) return this._thinkingCache;
-    let result = "";
-    for (const p of this.parts) {
-      if (p.type === "thinking") result += p.text;
+    /** Validate and apply a staged update atomically, preserving this object's identity. */
+    update(update: MessageUpdate): this {
+        const parts = update.parts === undefined ? this.content : this.normalize(update.parts);
+        const metadata = update.metadata ?? this.meta;
+        assert(metadata && typeof metadata === "object" && !Array.isArray(metadata), "Invalid message metadata"); assertJson(metadata);
+        const tags = update.tags ?? this.labels; assert(tags.every(tag => typeof tag === "string"), "Invalid message tags");
+        const keys = new Set([...this.requestKeys, ...update.requestMetadataKeys ?? []]);
+        assert([...keys].every(key => typeof key === "string"), "Invalid request metadata keys");
+        const affectsRequest = update.parts !== undefined || [...keys].some(key => JSON.stringify(this.meta[key]) !== JSON.stringify(metadata[key]));
+        const nextMeta = immutable(copy(metadata)); const nextTags = immutable([...new Set(tags)]);
+        this.content = parts; this.meta = nextMeta; this.labels = nextTags; this.requestKeys = keys;
+        return this.changed(affectsRequest);
     }
-    this._thinkingCache = result;
-    return result;
-  }
-
-  /** 是否包含思考内容 */
-  get hasThinking(): boolean {
-    if (this._hasThinkingCache !== undefined) return this._hasThinkingCache;
-    this._hasThinkingCache = this.parts.some((p) => p.type === "thinking");
-    return this._hasThinkingCache;
-  }
-
-  /** 是否包含媒体内容（图片/音频/文件） */
-  get hasMedia(): boolean {
-    if (this._hasMediaCache !== undefined) return this._hasMediaCache;
-    this._hasMediaCache = this.parts.some(
-      (p) => p.type === "image" || p.type === "audio" || p.type === "file"
-    );
-    return this._hasMediaCache;
-  }
-
-  /**
-   * 是否为空消息。
-   *
-   * 只包含空 text/thinking part 或没有 parts 的消息视为空；
-   * 媒体、工具调用和工具结果即使文本载荷为空，也保留为有效消息。
-   */
-  get isEmpty(): boolean {
-    return !this.parts.some((part) => {
-      if (part.type === "text" || part.type === "thinking") {
-        return part.text.length > 0;
-      }
-      return true;
-    });
-  }
-
-  /** 返回移除空消息后的新数组，不修改原数组。 */
-  static pruneEmpty(messages: Message[]): Message[] {
-    return messages.filter((message) => !message.isEmpty);
-  }
-
-  /**
-   * 手动失效所有 getter 缓存。
-   *
-   * 当通过 addText/addImage/... 等内置方法修改时，缓存会自动失效；
-   * 但如果直接对 parts 数组进行 push/splice 等操作，请调用此方法。
-   */
-  invalidateCache(): this {
-    this._textCache = undefined;
-    this._thinkingCache = undefined;
-    this._toolCallsCache = undefined;
-    this._hasMediaCache = undefined;
-    this._hasThinkingCache = undefined;
-    return this;
-  }
-
-  // ========================
-  //  内部辅助
-  // ========================
-
-  private static normalizeParts(
-    content: string | MessagePart | MessagePart[]
-  ): MessagePart[] {
-    if (typeof content === "string") {
-      return [{ type: "text", text: content }];
+    private replaceText(type: "text" | "thinking", text: string): this {
+        const next: MessagePart[] = [];
+        let inserted = false;
+        for (const part of this.content) {
+            if (part.type === type) {
+                if (!inserted && text)
+                    next.push({ type, text, id: part.id });
+                inserted = true;
+            }
+            else
+                next.push(part);
+        }
+        if (!inserted && text)
+            next.push({ type, text });
+        return this.setParts(next);
     }
-    if (Array.isArray(content)) {
-      return content;
+    setText(text: string): this {
+        return this.replaceText("text", text);
     }
-    return [content];
-  }
-
-  //========================
-  //  序列化 / 反序列化
-  // ========================
-
-  /**
-   * 序列化为 JSON 安全对象（含子树）
-   *
-   * 递归序列化所有 children，避免 parent 循环引用。
-   * 反序列化时通过 fromJSON 自动重建 parent 关系。
-   */
-  toJSON(): Record<string, unknown> {
-    const data: Record<string, unknown> = {
-      role: this.role,
-      parts: this.parts,
-      metadata: this.metadata,
-      tags: Array.from(this.tags),
-    };
-
-    if (this.model) data.model = this.model;
-    if (this.usage) data.usage = this.usage.toJSON();
-    if (this.children.length > 0) {
-      data.children = this.children.map((c) => c.toJSON());
+    setThinking(text: string): this {
+        return this.replaceText("thinking", text);
     }
-
-    return data;
-  }
-
-  /**
-   * 从 JSON 对象反序列化（含子树）
-   *
-   * 自动重建 parent/children 树结构关系。
-   */
-  static fromJSON(data: Record<string, unknown>): Message {
-    const role = data.role as Role;
-    const parts = (data.parts as MessagePart[]) || [];
-    const metadata = (data.metadata as Record<string, unknown>) || {};
-
-    const msg = new Message(role, parts, metadata);
-
-    // 恢复标签
-    const tags = data.tags as string[] | undefined;
-    if (tags) {
-      for (const t of tags) {
-        msg.tags.add(t);
-      }
+    appendText(text: string): this {
+        return this.addPart({ type: "text", text });
     }
-
-    // 恢复 model & usage
-    if (data.model) msg.model = data.model as string;
-    if (data.usage) msg.usage = Usage.fromJSON(data.usage as Record<string, unknown>);
-
-    // 递归恢复子节点
-    const childrenData = data.children as Record<string, unknown>[] | undefined;
-    if (childrenData) {
-      for (const childData of childrenData) {
-        const child = Message.fromJSON(childData);
-        msg.append(child);
-      }
+    appendThinking(text: string): this {
+        return this.addPart({ type: "thinking", text });
     }
-
-    return msg;
-  }
+    addPart(part: MessagePart): this {
+        return this.setParts([...this.content, part]);
+    }
+    replacePart(partId: string, replacement: MessagePart): this {
+        assert(this.content.some(p => p.id === partId), "Unknown content part");
+        return this.setParts(this.content.map(p => p.id === partId ? { ...replacement, id: partId } : p));
+    }
+    removePart(partId: string): this {
+        assert(this.content.some(p => p.id === partId), "Unknown content part");
+        return this.setParts(this.content.filter(p => p.id !== partId));
+    }
+    addImage(url: string, mimeType?: string): this {
+        return this.addPart({ type: "image", url, mimeType });
+    }
+    addAudio(url: string, mimeType?: string): this {
+        return this.addPart({ type: "audio", url, mimeType });
+    }
+    addVideo(url: string, mimeType?: string): this {
+        return this.addPart({ type: "video", url, mimeType });
+    }
+    addFile(url: string, options: {
+        mimeType?: string;
+        fileName?: string;
+    } = {}): this {
+        return this.addPart({ type: "file", url, ...options });
+    }
+    setMeta(key: string, value: unknown, options: { affectsRequest?: boolean } = {}): this {
+        assertJson(value);
+        this.meta = immutable(copy({ ...this.meta, [key]: value }));
+        if (options.affectsRequest) this.requestKeys.add(key);
+        return this.changed(this.requestKeys.has(key));
+    }
+    deleteMeta(key: string, options: { affectsRequest?: boolean } = {}): this {
+        const next = { ...this.meta };
+        delete next[key];
+        this.meta = immutable(next);
+        if (options.affectsRequest) this.requestKeys.add(key);
+        return this.changed(this.requestKeys.has(key));
+    }
+    tag(...tags: string[]): this {
+        this.labels = immutable([...new Set([...this.labels, ...tags])]);
+        return this.changed();
+    }
+    untag(...tags: string[]): this {
+        this.labels = immutable(this.labels.filter(tag => !tags.includes(tag)));
+        return this.changed();
+    }
+    hasTag(tag: string): boolean {
+        return this.labels.includes(tag);
+    }
+    /** Detached request snapshot preserves source identity, while clone creates new identity. */
+    snapshot(): Message {
+        return Message.fromJSON(this.toJSON());
+    }
+    clone(): Message {
+        return new Message(this.role, this.content, this.meta, { id: id("msg"), tags: this.labels, requestMetadataKeys: [...this.requestKeys] });
+    }
+    toJSON(): MessageData {
+        return copy({ id: this.id, revision: this.version, requestRevision: this.requestVersion, requestMetadataKeys: [...this.requestKeys], role: this.role, parts: this.content, metadata: this.meta, tags: this.labels });
+    }
+    static fromJSON(data: MessageData): Message {
+        assert(data && typeof data.id === "string" && Number.isSafeInteger(data.revision) && data.metadata && Array.isArray(data.parts) && Array.isArray(data.tags) && data.tags.every(t => typeof t === "string"), "Invalid message data");
+        return new Message(data.role, data.parts, data.metadata, data);
+    }
+    private normalize(content: MessageContent): MessagePart[] {
+        const parts = typeof content === "string" ? (content ? [{ type: "text" as const, text: content }] : []) : copy([...content]);
+        const ids = new Set<string>();
+        for (const part of parts) {
+            assert(part && ["text", "thinking", "image", "audio", "video", "file", "tool_call", "tool_result"].includes(part.type), "Invalid message part");
+            if (part.type === "text" || part.type === "thinking")
+                assert(typeof part.text === "string", "Invalid text part");
+            else if (part.type === "tool_call")
+                assert(typeof part.toolCallId === "string" && typeof part.name === "string" && typeof part.arguments === "string", "Invalid tool call");
+            else if (part.type === "tool_result")
+                assert(typeof part.toolCallId === "string" && typeof part.result === "string", "Invalid tool result");
+            else
+                assert(typeof part.url === "string", "Invalid media part");
+            assertJson(part);
+            part.id ??= id("part");
+            assert(typeof part.id === "string" && part.id && !ids.has(part.id), "Invalid or duplicate part identity");
+            ids.add(part.id);
+        }
+        return immutable(parts);
+    }
+    private changed(affectsRequest = false): this {
+        this.version++;
+        if (affectsRequest) this.requestVersion++;
+        for (const observer of [...this.observers])
+            observer({ message: this, revision: this.version });
+        return this;
+    }
 }

@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import OpenAI from "openai";
-import { Agent } from "../../src/agent";
-import { RequestConfig } from "../../src/config";
-import { Session } from "../../src/session";
-import { StreamEventType } from "../../src/stream";
+import { Agent } from "../../src/legacy/agent";
+import { RequestConfig } from "../../src/legacy/config";
+import { Session } from "../../src/legacy/session";
+import { StreamEventType } from "../../src/legacy/stream";
 
 const apiKey = process.env.DEEPSEEK_API_KEY;
 const baseURL = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";

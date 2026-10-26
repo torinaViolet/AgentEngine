@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { RequestConfig } from "../../src/config";
+import { RequestConfig } from "../../src/legacy/config";
 
 describe("RequestConfig", () => {
   it("starts empty and exposes query helpers", () => {

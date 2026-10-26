@@ -5,14 +5,14 @@ import {
   GeminiAdapter,
   OpenAIAdapter,
   OpenAIResponsesAdapter,
-} from "../../src/adapter";
+} from "../../src/legacy/adapter";
 import {
   normalizeThinkingOptions,
   shouldSerializeThinking,
-} from "../../src/adapter/MessageAdapter";
-import { Message, Role } from "../../src/message";
-import type { MediaResolver, ResolvedMedia } from "../../src/media";
-import type { ToolSchema } from "../../src/tool";
+} from "../../src/legacy/adapter/MessageAdapter";
+import { Message, Role } from "../../src/legacy/message";
+import type { MediaResolver, ResolvedMedia } from "../../src/legacy/media";
+import type { ToolSchema } from "../../src/legacy/tool";
 
 class FakeResolver implements MediaResolver {
   public readonly calls: string[] = [];

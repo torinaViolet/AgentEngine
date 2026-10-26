@@ -1,449 +1,97 @@
-# AgentEngine
+# AgentEngine 3.0
 
-AgentEngine 是一个轻量、模块化、可测试的 TypeScript AI Agent 框架。
+AgentEngine 是一个模块化的 TypeScript Agent 框架。Message 负责内容，Session 负责组织，PromptBuilder 负责临时上下文，Generator 负责一次模型请求，ToolExecutor 负责审批与执行，Agent 负责持续的工具循环和会话维护。
 
-它的目标不是把所有能力塞进一个黑盒，而是把 Agent 拆成清晰的模块：消息、会话、工具、流式解析、提示词构建、请求配置、平台适配和自动循环。你可以直接使用完整的 `Agent`，也可以单独拿其中某个模块来构建自己的系统。
+3.0 根入口使用新的 API。原 2.x 实现保留在 `@notic/agent-engine/legacy`，详见 [迁移说明](./docs/MIGRATION-3.0.md)。
 
-> 简单的事情简单做，复杂的事情也能拆开做。
-
-```ts
-import OpenAI from "openai";
-import { Agent, Session, StreamEventType } from "@notic/agent-engine";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const agent = new Agent({
-  client,
-  model: "gpt-4o-mini",
-  session: Session.create("你是一个简洁可靠的助手。"),
-});
-
-agent.on(StreamEventType.TEXT_DELTA, (event) => {
-  process.stdout.write(event.delta);
-});
-
-const reply = await agent.run("用一句话介绍 AgentEngine。");
-console.log(reply.text);
+```sh
+npm install @notic/agent-engine@^3.0.0
 ```
 
-需要一次性取得完整响应时：
+```ts
+import { Agent, AgentSession, OpenAIProvider, PromptBuilder } from "@notic/agent-engine";
+
+const session = AgentSession.create({ systemPrompt: "你是一个简洁可靠的助手。" });
+const promptBuilder = new PromptBuilder();
+const agent = new Agent({
+  provider: new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY }),
+  model: "your-model",
+  session,
+  promptBuilder,
+  generation: { temperature: 0.5, maxOutputTokens: 2048 },
+  execution: { maxSteps: 10 },
+});
+agent.on("textDelta", event => {
+  if (event.type === "textDelta") process.stdout.write(event.delta);
+});
+const result = await agent.chat("介绍一下 AgentEngine。");
+console.log(result.message?.text, result.usage);
+```
+
+## 独立模块
+
+| 模块 | 用途 |
+| --- | --- |
+| Message | 编辑文本、思考、媒体和工具内容块；稳定 ID、版本与变更通知 |
+| TreeSession | 树结构会话、分支选择、剪枝与嫁接 |
+| ListSession | 候选消息序列，默认 sequence，可选 turn |
+| AgentSession | 一次用户交互作为一轮，轮内包含多个模型和工具步骤 |
+| PromptBuilder | 临时注入、异步转换、来源追踪、不消耗寿命的预览 |
+| Provider / 能力接口 | 可继承 HTTP 基类，聊天、图片、音频、视频、向量能力独立扩展 |
+| Generator | 单次模型调用；不写 Session，不执行工具 |
+| ToolKit / ToolExecutor | JSON Schema 校验、动态工具、授权、人工审批、取消与超时 |
+| Agent | chat、run、continue、resume、步骤预算、提交与执行记录 |
+
+三种 Session 都保存 Turn、Run、Step、工具执行及消息生成贡献，可以按轮次和执行查询；导出使用平坦的版本化结构。
+
+Agent 使用传入的 Session 和 PromptBuilder。未提供 Session 时必须指定 `mode: "tree" | "list" | "agent"`；未提供 PromptBuilder 时创建默认实例，均可从 Agent 获取。
+
+## 单次生成
 
 ```ts
-const reply = await agent.run("用一句话介绍 AgentEngine。", {
+import { Generator, Message, AnthropicProvider } from "@notic/agent-engine";
+
+const generator = new Generator({
+  provider: new AnthropicProvider({ apiKey: "your-key" }),
+  model: "your-model",
+});
+const response = await generator.generate({
+  messages: [Message.user("分析这段内容")],
   stream: false,
 });
+console.log(response.message.text);
 ```
 
-流式与非流式模式使用同一套 `Message`、Session 和工具调用循环。
+自主维护上下文、执行工具的业务使用 Agent。已准备好 Session 时调用 `agent.run()`；开始新交互调用 `agent.chat(input)`。
 
-如果上下文已经写入当前 `Session`，可以直接生成 Assistant：
+## 平台与业务扩展
 
-```ts
-session.addUser("已经准备好的上下文");
-const reply = await agent.generate();
-```
+提供 OpenAIProvider（Chat Completions / OpenAI compatible）、OpenAIResponsesProvider、AnthropicProvider 和 GeminiProvider。运行时无需安装厂商 SDK，默认使用标准 fetch、Response 和 Web Streams；支持自定义地址、传输与附件解析器。工具校验依赖 Ajv。
 
-在 Assistant 写入 Session 前执行可等待转换：
+框架复用经过验证的内部协议转换与解析代码，2.x 兼容层独立保留。浏览器入口不包含 Node builtin；本地文件附件解析器从 `@notic/agent-engine/node` 导入。
 
-```ts
-agent.on(StreamEventType.BEFORE_ASSISTANT_COMMIT, async (event) => {
-  const transformed = await transformText(event.message.text);
-  event.message.setText(transformed);
-});
-```
+业务可以继承 Provider 或现有厂商 Provider，实现 ImageProvider、AudioProvider、VideoProvider，复用鉴权、传输、SSE、二进制和附件解析。视频任务提交与查询分开，便于恢复已有任务。Message 支持视频内容块；内置聊天 codec 暂不编码视频输入，可覆盖 serializeMessages 扩展。媒体接口由子类实现，详见 [多媒体扩展](./docs/MULTIMEDIA-3.0.md)。
 
-## 适合做什么
+消息的显示、保存和发送可以分别处理：流式事件用于即时显示，beforeCommit 用于修改保存内容，PromptBuilder 用于改变请求上下文。续写保留原消息身份并追加内容，临时续写指令不进入 Session。
 
-- 构建带工具调用的 AI Agent
-- 管理多轮对话、分支会话和可恢复上下文
-- 把 OpenAI-compatible、Anthropic、Gemini 等平台统一到同一套消息模型
-- 解析模型 stream，并把文本、思考内容、工具调用转换成结构化事件
-- 用声明式规则动态注入提示词和运行时上下文
-- 为 Agent 各模块编写可控的单元测试和 fake client 测试
+运行中可以更新 Message 的业务 metadata/tags 或 Session.metadata；内容、协议元数据与结构编辑仍检测冲突。续写临时消息进入 PromptBuilder，previewContext 支持续写参数，beforeAppend 可编辑默认合并后的目标草稿。编译器可返回消息和来源标签；旧会话可直接映射公开的平坦结构导入，保留业务 ID 与兄弟顺序。具体行为见 [CE 反馈落实与接入契约](./docs/CE-FEEDBACK-3.0.md)。
 
-## 核心特性
+## 文档与验证
 
-- **模块化架构**：`Message`、`Session`、`Tool`、`Stream`、`Prompt`、`Config`、`Adapter`、`Agent` 都可以单独使用。
-- **统一消息模型**：支持文本、图片、音频、文件、工具调用、工具结果和 thinking 内容。
-- **树形会话管理**：天然支持对话分支、回退、分页、查询和插入。
-- **工具系统**：Builder 风格定义工具，自动生成 JSON Schema，支持生命周期 Hook、MCP 和错误策略。
-- **流式事件**：把模型 stream 解析成 `TEXT_DELTA`、`TOOL_CALL_*`、`MESSAGE_DONE` 等事件。
-- **提示词构建器**：用 `Rule` 定位消息，再注入临时上下文；也支持数组操作管线。
-- **请求配置器**：链式构建 temperature、top_p、max_tokens、response_format 等参数。
-- **低耦合 Provider**：Client、Adapter、Parser 三层可独立替换，内置 OpenAI Compatible、OpenAI Responses、Anthropic 和 Gemini 预设。
-- **流式与非流式**：同一套 Agent、Session 和工具循环同时支持增量 stream 与完整响应。
-- **浏览器安全入口**：根入口不包含 Node.js builtin，本地文件解析通过显式 `./node` 子入口使用。
-- **中断与恢复**：支持 abort、timeout、partial message、continue 和 resume。
-- **工具审批**：支持自动审批、自定义审批、手动审批和审批超时策略。
+- [3.0 API 与使用示例](./docs/API.md)
+- [Provider 继承与多媒体](./docs/MULTIMEDIA-3.0.md)
+- [CE 反馈落实与接入契约](./docs/CE-FEEDBACK-3.0.md)
+- [2.x → 3.0 迁移](./docs/MIGRATION-3.0.md)
+- [实施状态与设计基线](./docs/PLAN-3.0.md)
+- [设计讨论记录](./docs/DESIGN-3.0.md)
+- [数据模型设计](./docs/DATA-MODEL-3.0.md)
+- [CharacterEditor 业务分析](./docs/CHARACTEREDITOR-3.0-NOTES.md)
+- [2.x 历史 API](./docs/API-2.x.md)
 
-## 安装
-
-```bash
-npm install @notic/agent-engine
-```
-
-根据你使用的平台安装对应 SDK：
-
-```bash
-# OpenAI / DeepSeek / Qwen / Kimi 等 OpenAI-compatible 平台
-npm install openai
-
-# Anthropic 原生 Messages API
-npm install @anthropic-ai/sdk
-
-# Gemini 原生 API
-npm install @google/genai
-
-# MCP 集成，可选
-npm install @modelcontextprotocol/sdk
-```
-
-环境要求：
-
-- Node.js >= 18
-- TypeScript 项目推荐开启 `strict`
-
-根入口可直接用于浏览器和 WebView。Node.js 中需要读取本地媒体文件时：
-
-```ts
-import { DefaultMediaResolver } from "@notic/agent-engine/node";
-```
-
-## 快速开始
-
-### 1. 创建 Agent
-
-```ts
-import OpenAI from "openai";
-import { Agent, RequestConfig, Session } from "@notic/agent-engine";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: "https://api.openai.com/v1",
-});
-
-const agent = new Agent({
-  client,
-  model: "gpt-4o-mini",
-  session: Session.create("你是一个友好的中文助手。"),
-  config: RequestConfig.create().temperature(0.3).maxTokens(1024),
-});
-```
-
-OpenAI-compatible 平台只需要替换 `baseURL` 和 `model`：
-
-```ts
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com",
-});
-```
-
-### 2. 监听流式输出
-
-```ts
-import { StreamEventType } from "@notic/agent-engine";
-
-agent.on(StreamEventType.TEXT_DELTA, (event) => {
-  process.stdout.write(event.delta);
-});
-
-agent.on(StreamEventType.TOOL_EXECUTE_START, (event) => {
-  console.log("tool:", event.name);
-});
-```
-
-### 3. 运行一轮对话
-
-```ts
-const reply = await agent.run("帮我写一个 npm 包介绍。");
-console.log(reply.text);
-```
-
-`Agent` 会自动把用户消息和助手回复写入 `Session`。
-
-## Provider
-
-Provider 只负责组合三块可替换能力：
-
-- `ModelClient`：发送平台请求，返回流或完整响应。
-- `MessageAdapter`：在统一 `Message` 与平台 JSON 之间转换。
-- `MessageStreamParser`：把平台流事件转换成统一事件和 `Message`。
-
-Agent 不需要知道当前使用哪一家模型平台。
-
-### OpenAI Compatible
-
-适用于 OpenAI Chat Completions，以及 DeepSeek、Qwen、Kimi、GLM 等兼容平台：
-
-```ts
-import OpenAI from "openai";
-import {
-  Agent,
-  OpenAICompatibleProvider,
-  Session,
-} from "@notic/agent-engine";
-
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com",
-});
-
-const agent = new Agent({
-  provider: new OpenAICompatibleProvider(client),
-  model: "deepseek-chat",
-  session: Session.create(),
-});
-```
-
-### OpenAI Responses API
-
-```ts
-import OpenAI from "openai";
-import { Agent, OpenAIResponsesProvider, Session } from "@notic/agent-engine";
-
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const agent = new Agent({
-  provider: new OpenAIResponsesProvider(client),
-  model: "your-openai-model",
-  session: Session.create(),
-});
-```
-
-Responses Provider 会保留 reasoning item、加密推理状态和 function call item，供下一轮工具调用继续使用。
-
-### Anthropic
-
-```ts
-import Anthropic from "@anthropic-ai/sdk";
-import { Agent, AnthropicProvider, Session } from "@notic/agent-engine";
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const agent = new Agent({
-  provider: new AnthropicProvider(client),
-  model: "your-claude-model",
-  session: Session.create(),
-});
-```
-
-### Gemini
-
-```ts
-import { GoogleGenAI } from "@google/genai";
-import { Agent, GeminiProvider, Session } from "@notic/agent-engine";
-
-const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const agent = new Agent({
-  provider: new GeminiProvider(client),
-  model: "your-gemini-model",
-  session: Session.create(),
-});
-```
-
-所有内置 Provider 都支持：
-
-```ts
-await agent.run("增量输出");
-await agent.run("完整响应", { stream: false });
-```
-
-## 工具调用示例
-
-```ts
-import { Agent, Param, Session, Tool, ToolKit } from "@notic/agent-engine";
-
-const getWeather = Tool.create(async (args) => {
-  return {
-    city: args.city,
-    temperature: 21,
-    unit: "celsius",
-  };
-})
-  .name("get_weather")
-  .description("查询城市天气")
-  .params(
-    Param.string("city").desc("城市名称").required()
-  )
-  .build();
-
-const toolkit = new ToolKit().add(getWeather);
-
-const agent = new Agent({
-  client,
-  model: "your-model",
-  session: Session.create("需要外部信息时可以调用工具。"),
-  toolkit,
-});
-
-const reply = await agent.run("北京今天适合跑步吗？");
-console.log(reply.text);
-```
-
-当模型发起工具调用时，AgentEngine 会自动执行工具、把结果写回会话，并再次请求模型生成最终答案。
-
-## 模块地图
-
-```text
-AgentEngine
-├─ Message   统一消息模型：文本、多模态、工具调用、树节点
-├─ Session   会话树：历史、分支、查询、插入、分页
-├─ Tool      工具系统：Param、Tool、ToolKit、Hook、MCP
-├─ Stream    流式解析：chunk -> 结构化事件 -> Message
-├─ Prompt    提示词构建：Rule、Injection、数组操作管线
-├─ Config    请求参数：预设、链式配置、三层优先级
-├─ Client    传输边界：流式请求、完整响应、中断信号
-├─ Adapter   消息转换：OpenAI、Responses、Anthropic、Gemini
-├─ Provider  Client + Adapter + Parser 的低耦合组合
-├─ Media     媒体解析：浏览器默认实现 + Node 本地文件子入口
-└─ Agent     编排层：自动循环、审批、中断、恢复
-```
-
-### Message
-
-统一消息对象，支持：
-
-- `Message.user()` / `Message.assistant()` / `Message.system()`
-- 文本、图片、音频、文件
-- 工具调用和工具结果
-- thinking 内容
-- 标签、元数据和树结构
-- `setText()` / `setParts()` 安全替换内容并自动失效缓存
-
-### Session
-
-会话管理器，负责：
-
-- root -> cursor 的当前历史路径
-- 对话分支和回退
-- 查询当前分支或全树
-- 在历史中插入消息
-- 在兄弟分支间分页切换
-
-### Tool
-
-工具系统，负责：
-
-- 用 `Param` 定义参数 schema
-- 用 `Tool` 包装 TypeScript 函数
-- 用 `ToolKit` 注册并执行多个工具
-- 用 Hook 处理校验、取消、结果改写和错误降级
-
-### Stream
-
-流式解析器，负责：
-
-- 文本增量
-- thinking / reasoning 增量
-- 工具调用增量
-- usage
-- 最终 `Message` 组装
-
-### Prompt
-
-提示词构建器，负责：
-
-- 按角色、标签、内容或自定义规则定位消息
-- 动态注入 system/user/assistant 消息
-- 控制注入生命周期、概率和优先级
-- 在发送模型前过滤、裁剪或转换上下文
-
-### Config
-
-请求参数配置器，负责：
-
-- temperature / top_p / top_k
-- max_tokens
-- stop
-- seed
-- response_format
-- 自定义平台参数
-
-### Adapter
-
-平台适配器，负责：
-
-- 把 AgentEngine 的 `Message[]` 序列化成平台请求格式
-- 处理多模态内容
-- 处理工具调用和工具结果
-- 控制 thinking 内容如何回传
-
-### Provider
-
-Provider 提供平台预设，但不接管 Agent 执行流程：
-
-- `OpenAICompatibleProvider`
-- `OpenAIResponsesProvider`
-- `AnthropicProvider`
-- `GeminiProvider`
-- `Provider.create()` 自定义组合
-
-通过 `provider.supportsComplete` 可以检查是否支持非流式完整响应。
-
-### Agent
-
-智能体编排层，负责：
-
-- 管理 `Session`
-- 调用模型 stream
-- 派发事件
-- 在 Assistant 提交 Session 前等待生命周期转换
-- 执行工具循环
-- 处理工具审批
-- 中断、超时、恢复和继续
-
-## 文档
-
-完整教程式 API 文档见：
-
-- [docs/API.md](./docs/API.md)
-- [CHANGELOG.md](./CHANGELOG.md)
-
-建议阅读顺序：
-
-1. 安装与最小示例
-2. Agent：智能体编排
-3. Tool：工具系统
-4. Prompt：提示词构建
-5. Session：会话树
-6. Adapter / Media：平台与多模态适配
-
-## 测试
-
-项目使用 Node.js 内置测试运行器。
-
-```bash
+```sh
+npm install
 npm test
-```
-
-真实 API 测试需要显式开启，避免普通测试误触发外部请求：
-
-```bash
-RUN_REAL_DEEPSEEK_TESTS=1 DEEPSEEK_API_KEY=sk-... npm run test:real:deepseek
-```
-
-## 构建
-
-```bash
 npm run build
 ```
 
-## License
-
-Apache-2.0
-
-## ListSession（候选列表）
-
-ListSession 与树状 Session 并列，Agent 根据传入的会话推断类型。每行维护候选及选中项，一次工具循环的完整消息轨迹属于同一个候选。
-
-```ts
-const session = ListSession.create("system");
-const agent = new Agent({ client, model, session });
-await agent.run("hello");
-session.regenerate(session.rows[1].id);
-await agent.generate();
-session.select(session.rows[1].id, session.rows[1].candidates[0].id);
-```
-
-切换早期候选保留后续行，但 staleRowIds 会标记上下文已变化。继续生成前显式 acceptHistory() 接受保留历史，或 truncateAfter()/regenerate() 处理。候选切换不撤销工具副作用。使用 toJSON()/ListSession.fromJSON() 保存完整选择及轨迹。应用重启后的 Agent 运行现场恢复不由 ListSession 单独保证。
+测试覆盖新 API、旧版兼容层、合成 HTTP/SSE、深树导入导出、审批、取消、续写、恢复及冲突；同时检查浏览器构建、无 Buffer 的附件处理和包导出。默认不调用真实模型。demo/battle 和 demo/editor 暂时使用 legacy 入口。
