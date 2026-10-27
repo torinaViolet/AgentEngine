@@ -24,14 +24,14 @@ export async function* decodeSSE(response: Response, signal?: AbortSignal, optio
     let bufferedBytes = 0;
     let emitted = false;
     let ended = false;
-    function drain(final: boolean): unknown[] {
-        const output: unknown[] = [];
+    function* drain(final: boolean): Generator<unknown> {
         if (final && /^\s*[\[{]/.test(buffer) && !emitted) {
             assert(encoder.encode(buffer).byteLength <= maxBytes, "SSE event exceeds maxEventBytes");
-            output.push(JSON.parse(buffer));
+            const event = JSON.parse(buffer);
             buffer = "";
             bufferedBytes = 0;
-            return output;
+            yield event;
+            return;
         }
         if (final) {
             buffer += "\n\n";
@@ -50,12 +50,12 @@ export async function* decodeSSE(response: Response, signal?: AbortSignal, optio
                 break;
             }
             if (data) {
-                output.push(JSON.parse(data));
+                const event = JSON.parse(data);
                 emitted = true;
+                yield event;
             }
         }
         assert(bufferedBytes <= maxBytes, "SSE event exceeds maxEventBytes");
-        return output;
     }
     try {
         while (!ended) {

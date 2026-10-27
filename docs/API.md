@@ -72,6 +72,8 @@ ListSession 默认 sequence：一个 Agent 运行产生的 Assistant → Tool �
 
 rows 返回只读行/候选视图。操作包含 select(rowId,candidateId)、addCandidate(rowId,messages)、removeCandidate(rowId,candidateId)、removeRow(rowId)、regenerate(rowId)、cancelRegeneration、truncateAfter(rowId|null)、acceptHistory 和 staleRowIds。
 
+3.0.2 起，历史有效性扫描与 acceptHistory 使用一次前缀遍历，保留原有 3.0 context 指纹值；已有列表/助手会话不需要迁移。编辑或选择后的失效判断仍按实际消息 requestRevision 计算。
+
 ```ts
 list.regenerate(rowId);
 await listAgent.run();
@@ -145,6 +147,8 @@ const response = await generator.generate({
 
 ProviderRequestError 含 HTTP status；流失败用 GenerationError(cause,partial?) 保留部分响应。自定义聊天实现 ChatProvider.generate，应把 signal 传到真实操作；Generator 会限制独立实现的等待并忽略迟到事件。HttpProvider 子类覆盖 generate 时需遵守原有取消契约，以保留原生部分状态。取消无法终止忽略 signal 的底层副作用，传输和工具需合作取消。
 
+3.0.2 起，内置 HttpProvider 只有看到本协议的完成信号才接受完整流式响应：OpenAI Chat 的 finish_reason、Responses 的 response.completed/response.incomplete、Anthropic 的 message_stop、Gemini candidate 的 finishReason。仅关闭 HTTP body 或 OpenAI 的 `[DONE]` 本身不能证明模型响应完整；提前 EOF 抛 GenerationError，其 cause 为 IncompleteStreamError（code=INCOMPLETE_STREAM），partial 保留已收到内容，不执行其中的残缺工具调用。流内错误信封会抛出 ProviderStreamError，保留 detail、message 及可用的 code/type/status；流式情况下它作为 GenerationError.cause 返回。非流式 HTTP 200 错误信封同样识别。自定义 ChatProvider 的完成判断仍由实现者负责。
+
 ## ToolExecutor：独立审批与执行
 
 ```ts
@@ -168,6 +172,8 @@ const outcome = await executor.execute(toolCall, { signal: controller.signal });
 JSON Schema 支持 draft-07 和显式声明 draft-2020-12；参数校验后才审批。Tool.validate、definition、execute 可单独使用；直接 Tool.execute 不经过审批，完整入口为 Executor.execute。
 
 ToolKit 提供 add/get/has/size/enable/disable/isEnabled/definitions。禁用工具既不对模型可见，也不能执行；通过审批后再次检查启用状态。addMCP 接受 listTools/callTool 结构化客户端，无需框架依赖 MCP SDK，业务负责连接/关闭。
+
+3.0.2 起，最后一次异步通知返回之后、真正调用工具函数之前，还会复查 signal、启用状态和注册对象。Executor.execute 的第二参数可提供同步 `assertCanExecute?: () => void`，在开始处理及最终启动点校验业务所有权；Agent 用它检查 Session 租约。此检查不能异步，防止检查后再出现等待窗口；已开始的工具仍需合作取消。
 
 Executor 配置 approval=auto/manual/policy、approvalTimeoutMs、errorPolicy=return/throw。policy 可异步返回 allow/deny/ask 或 `{action,reason?}`，显式 policy 决定授权；默认模式遵守 requiresApproval。deny、拒绝和审批超时返回 rejected；工具异常默认返回失败结果，throw 模式抛 ToolExecutionError。取消始终抛出并记录 interrupted。
 
@@ -198,6 +204,8 @@ const result = await agent.chat("完成任务");
 
 options 支持 signal、stream、generation、execution、thinking、requestTimeoutMs。execution.maxSteps 默认 10，3.0.1 起 0 表示不限轮数；负数、非整数和非有限值无效。execution.timeoutMs 覆盖整次运行的模型、工具和审批等待，0 或不设置表示不限时。工具默认 sequential，也可 parallel，与 toolErrorPolicy 独立。return 将异常回传模型；pause/throw 保存失败工具结果后结束，应用决定是否 resume。审批拒绝是工具结果。
 
+`execution.lengthPolicy`（3.0.2）可为 `"error"`（默认，沿用原行为）或 `"complete"`。complete 允许没有工具调用的 length 回复正常结束，结果 status=completed、stopReason=length，afterCommit/afterRun 与 lastRunState 一致；续写同样适用。包含工具调用的截断回复始终失败，不执行工具。单次执行配置可覆盖 Agent 默认值，例如 `await agent.continue({execution:{lengthPolicy:"complete"}})`。CE 希望保持 2.x 截断行为时，应显式设置这个选项。
+
 requestTimeoutMs 是单次完整模型请求（包括整段流式响应）的毫秒上限，不是流式空闲超时，也不包含提示词准备、工具或审批等待。每个模型步骤重新计时。优先级为单次 chat/run/continue/resume 选项 > Agent 配置 > Generator 配置；Generator.generate 也可直接覆盖默认值。0 明确关闭继承的请求超时，未配置则不限时。负数及非有限值无效。达到请求或总运行超时后，AgentResult.status 为 interrupted、stopReason 为 timeout；保留可提交的片段，编辑冲突时保留到 unapplied。调用方 signal 的取消仍然有效。
 
 AgentResult 包含 runId/turnId?/status/stopReason/message?/usage/error?/unapplied?/unappliedToolResults?。失败、取消、超时、maxSteps、输出长度限制抛 AgentRunError，其 result 保存进度；lastRunState 保存最近结果。一个 Agent 或一个 Session 同时只允许一个活动 Agent 执行，重叠 chat 在添加输入前被拒绝。
@@ -213,6 +221,8 @@ AgentResult 包含 runId/turnId?/status/stopReason/message?/usage/error?/unappli
 ### 生命周期与业务保存
 
 hooks.beforeRequest(context,identity) 修改请求副本；beforeCommit(message,commitContext) 修改或返回替代生成 Message；afterCommit(actualMessage,commitContext) 在内存提交后执行；afterRun(result) 在运行结算后执行。hook 可异步，内存提交与业务数据库保存分别处理。
+
+3.0.2 的正常提交 commitContext 带 `signal`，beforeAppend 也继承它；afterCommit 应将它传入可取消的持久化操作。为保证运行中止后仍能保存已有片段，partial 恢复提交不传已取消的 signal。afterCommit 操作的是实际消息，框架会等它返回或抛错后才释放 Session 租约；总超时/用户停止会取消 signal，但不会强行终止忽略 signal 的 hook 或允许另一 Agent 与之重叠。hook 返回后会再次检查取消和会话冲突，超时不再错误结算为 completed。业务应给外部保存设置自己的有界等待，且不得在 hook 返回后继续异步修改实际消息。afterRun 已在运行结算之后执行，不属于运行预算。
 
 续写时 beforeCommit 的 context 带 operation=append、targetMessageId 和隔离的 targetMessage 快照。然后 `beforeAppend(draft,context)` 收到默认合并后的目标草稿，context.targetMessage / generatedMessage 都是隔离快照；可以编辑草稿或返回保留目标 ID/role 的替代 Message。草稿在钩子成功、身份/协议与租约检查通过后才提交，失败不写入目标。异步等待期间其他业务 metadata/tags 的无关修改会保留；同一个键由钩子显式覆盖或删除时按钩子决定。续写取消后保留部分输出也走这个合并点。
 

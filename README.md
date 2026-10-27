@@ -81,6 +81,7 @@ console.log(response.message.text);
 - [3.0 API 与使用示例](./docs/API.md)
 - [Provider 继承与多媒体](./docs/MULTIMEDIA-3.0.md)
 - [CE 反馈落实与接入契约](./docs/CE-FEEDBACK-3.0.md)
+- [3.0.2 缺陷修补与验证](./docs/FIXES-3.0.2.md)
 - [2.x → 3.0 迁移](./docs/MIGRATION-3.0.md)
 - [实施状态与设计基线](./docs/PLAN-3.0.md)
 - [设计讨论记录](./docs/DESIGN-3.0.md)

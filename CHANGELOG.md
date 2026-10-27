@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.0.2 - 2026-10-27
+
+- Add `execution.lengthPolicy: "error" | "complete"` to Agent defaults and per-run options. The default remains `error`; opt-in `complete` finishes a length-limited final reply with `stopReason: "length"`. Truncated tool-call responses still fail without executing tools, including continuations.
+- Native HTTP chat providers now require protocol completion before accepting a stream. Premature EOF throws `GenerationError` with the available partial response instead of completing or executing unfinished tool calls. OpenAI, Responses, Anthropic and Gemini use their own completion signals.
+- Propagate in-band error envelopes as `ProviderStreamError`, preserving error message, code, type, status and partial output. Keep valid SSE events when a later malformed event arrives in the same network chunk. The legacy parsers and legacy API behavior are unchanged.
+- Recheck session ownership after commit hooks and at each tool's actual start. ToolExecutor rechecks cancellation, visibility and registry identity after asynchronous notifications/approval waits, and accepts a synchronous `assertCanExecute` guard. Previously started side effects still require cooperative cancellation.
+- Repair outstanding tool results by call occurrence and message order, allowing protocol tool-call IDs to repeat in different steps or turns.
+- Attribute tool-call messages split from retained continuation partials and record their unexecuted failure results, preserving run/step queries across JSON round trips.
+- Scan ListSession/AgentSession context fingerprints in linear time while producing the exact existing 3.0 JSON/hash values; no persisted context or session format migration is needed.
+- Commit hooks receive a cancellation `signal`. An awaited `afterCommit` retains the live session lease until it settles; cancellation/timeout observed there now ends as interrupted, never completed. Noncooperative persistence hooks cannot be forcibly terminated safely.
+- Add 70 regression cases. Full suite: 347 tests, 346 passed, one opt-in live API test skipped; browser runtime/build and package exports passed. See `docs/FIXES-3.0.2.md`.
+
 ## 3.0.1 - 2026-10-27
 
 - Retain partial replies when a later model request fails during a continuation tool loop. The initial failed continuation still rolls back; cancellation and timeouts retain partial progress, and concurrent content edits still take precedence. Later commit hooks receive a create context without the original continuation target.

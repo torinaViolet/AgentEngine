@@ -79,6 +79,8 @@ export class ToolExecutor {
         stepId?: string;
         onRecord?: (record: ToolExecutionRecord) => void | Promise<void>;
         errorPolicy?: "return" | "throw";
+        /** Synchronous ownership/precondition check at the actual execution boundary. */
+        assertCanExecute?: () => void;
     } = {}): Promise<ToolOutcome> {
         const record: ToolExecutionRecord = { id: id("execution"), name: call.name, toolCallId: call.toolCallId, runId: context.runId, stepId: context.stepId, arguments: {}, status: "running" };
         const update = async () => {
@@ -87,6 +89,7 @@ export class ToolExecutor {
         };
         try {
             context.signal?.throwIfAborted();
+            context.assertCanExecute?.();
             const tool: Tool<any> | undefined = this.toolkit.get(call.name);
             assert(tool && this.toolkit.isEnabled(call.name), `Unavailable tool: ${call.name}`);
             let args: unknown;
@@ -122,6 +125,11 @@ export class ToolExecutor {
             assert(this.toolkit.isEnabled(call.name), `Tool disabled before execution: ${call.name}`);
             record.status = "running";
             await update();
+            // Notifications and approval waits may cancel, disable, replace or invalidate the call.
+            context.assertCanExecute?.();
+            context.signal?.throwIfAborted();
+            assert(this.toolkit.isEnabled(call.name), `Tool disabled before execution: ${call.name}`);
+            assert(this.toolkit.get(call.name) === tool, `Tool changed before execution: ${call.name}`);
             const toolContext: ToolContext = { signal: context.signal, runId: context.runId, stepId: context.stepId, toolExecutionId: record.id, toolCallId: call.toolCallId, throwIfAborted: () => context.signal?.throwIfAborted() };
             const result = await abortable(Promise.resolve(tool.execute(validated, toolContext)), context.signal);
             const message = Message.tool(call.toolCallId, result, call.name);

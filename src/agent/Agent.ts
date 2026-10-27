@@ -12,6 +12,8 @@ export interface AgentExecutionConfig {
     timeoutMs?: number;
     toolErrorPolicy?: "return" | "pause" | "throw";
     toolConcurrency?: "sequential" | "parallel";
+    /** A length-limited final response may complete; truncated tool calls always fail. Default: error. */
+    lengthPolicy?: "error" | "complete";
 }
 export interface RunOptions {
     signal?: AbortSignal;
@@ -34,6 +36,8 @@ export interface CommitContext {
     targetMessageId?: string;
     /** Detached snapshot, safe to inspect without editing the live target. */
     targetMessage?: Message;
+    /** Cancels cooperative hooks. afterCommit is awaited before releasing session ownership. */
+    signal?: AbortSignal;
 }
 export interface AppendCommitContext extends CommitContext { targetMessage: Message; generatedMessage: Message; }
 export interface AgentHooks {
@@ -226,11 +230,25 @@ export class Agent<S extends SessionLike = SessionLike> {
         this.session.assertGenerationUnchanged();
         return { generated, append: { draft, baseline } };
     }
+    /** Attribute every message a continuation may split out, including retained partials. */
+    private commit(generated: Message, context: CommitContext, append?: ContinuationCommitOptions): Message {
+        const previousIds = new Set(this.session.history().map(message => message.id));
+        const message = context.operation === "append"
+            ? this.session.appendContinuation(context.targetMessageId!, generated, append)
+            : this.session.appendGenerated(generated);
+        this.session.trace.updateStep(context.stepId, { messageId: message.id });
+        this.session.trace.contribute({ messageId: message.id, revision: message.revision, runId: context.runId, stepId: context.stepId, operation: context.operation });
+        for (const added of this.session.history())
+            if (!previousIds.has(added.id) && added.id !== message.id)
+                this.session.trace.contribute({ messageId: added.id, revision: added.revision, runId: context.runId, stepId: context.stepId, operation: "create" });
+        return message;
+    }
     private async execute(kind: RunRecord["kind"], options: RunOptions, target?: Message, instruction?: string, carryThinking = false, resumedFrom?: string): Promise<AgentResult> {
         const config = { maxSteps: 10, ...this.options.execution, ...options.execution };
         assert(Number.isSafeInteger(config.maxSteps) && config.maxSteps >= 0, "maxSteps must be a non-negative integer (0 means unlimited)");
         if (config.timeoutMs !== undefined)
             assert(Number.isFinite(config.timeoutMs) && config.timeoutMs >= 0, "timeoutMs must be non-negative (0 means unlimited)");
+        assert(config.lengthPolicy === undefined || config.lengthPolicy === "error" || config.lengthPolicy === "complete", "lengthPolicy must be error or complete");
         const controller = new AbortController();
         this.controller = controller;
         const externalAbort = () => controller.abort(options.signal?.reason);
@@ -274,28 +292,25 @@ export class Agent<S extends SessionLike = SessionLike> {
                 generated = response.message;
                 modelCompleted = true;
                 trace.updateStep(stepId, { status: "completed", finishReason: response.finishReason, usage: response.usage });
-                const commitContext: CommitContext = { runId: run.id, stepId, operation: target && first ? "append" : "create", targetMessageId: target && first ? target.id : undefined };
+                const commitContext: CommitContext = { runId: run.id, stepId, operation: target && first ? "append" : "create", targetMessageId: target && first ? target.id : undefined, signal: controller.signal };
                 const prepared = await this.prepareCommit(generated, commitContext, controller.signal); generated = prepared.generated;
                 session.assertGenerationUnchanged();
-                const previousIds = new Set(session.history().map(message => message.id));
-                lastMessage = target && first ? session.appendContinuation(target.id, generated, prepared.append) : session.appendGenerated(generated);
-                trace.updateStep(stepId, { messageId: lastMessage.id });
-                trace.contribute({ messageId: lastMessage.id, revision: lastMessage.revision, runId: run.id, stepId, operation: commitContext.operation });
-                for (const message of session.history())
-                    if (!previousIds.has(message.id) && message.id !== lastMessage.id)
-                        trace.contribute({ messageId: message.id, revision: message.revision, runId: run.id, stepId, operation: "create" });
+                lastMessage = this.commit(generated, commitContext, prepared.append);
                 const calls = [...generated.toolCalls];
                 generated = undefined;
                 await this.notify({ type: "messageCommitted", runId: run.id, stepId, message: lastMessage.snapshot(), operation: commitContext.operation });
                 await this.options.hooks?.afterCommit?.(lastMessage, commitContext);
                 first = false;
-                if (response.finishReason === "length")
+                controller.signal.throwIfAborted();
+                session.assertGenerationUnchanged();
+                if (response.finishReason === "length" && (calls.length || config.lengthPolicy !== "complete"))
                     throw new Error("Model output limit reached");
                 if (!calls.length) {
-                    result = { runId: run.id, turnId, status: "completed", stopReason: "final", message: lastMessage, usage: trace.usage(run.id) };
+                    result = { runId: run.id, turnId, status: "completed", stopReason: response.finishReason === "length" ? "length" : "final", message: lastMessage, usage: trace.usage(run.id) };
                     break;
                 }
                 const executeTool = (call: typeof calls[number]) => this.toolExecutor.execute(call, { signal: controller.signal, runId: run.id, stepId,
+                    assertCanExecute: () => session.assertGenerationUnchanged(),
                     errorPolicy: config.toolErrorPolicy === "pause" || config.toolErrorPolicy === "throw" ? "throw" : "return", onRecord: record => {
                         trace.tool(record);
                     } });
@@ -354,12 +369,13 @@ export class Agent<S extends SessionLike = SessionLike> {
                 try {
                     const commitContext: CommitContext = { runId: run.id, stepId, operation: target && first ? "append" : "create", targetMessageId: target && first ? target.id : undefined };
                     const prepared = await this.prepareCommit(partial, commitContext); const transformed = prepared.generated;
-                    lastMessage = target && first ? session.appendContinuation(target.id, transformed, prepared.append) : session.appendGenerated(transformed);
+                    lastMessage = this.commit(transformed, commitContext, prepared.append);
                     unappliedPartial = undefined;
-                    trace.updateStep(stepId, { messageId: lastMessage.id });
-                    trace.contribute({ messageId: lastMessage.id, revision: lastMessage.revision, runId: run.id, stepId, operation: commitContext.operation });
-                    for (const call of transformed.toolCalls)
-                        session.appendGenerated(Message.tool(call.toolCallId, { error: "Incomplete tool call; no operation was executed", interrupted: true }, call.name));
+                    for (const call of transformed.toolCalls) {
+                        const outcome = this.failedTool(call, new Error("Incomplete tool call; no operation was executed"), run.id, stepId, interrupted ? "interrupted" : "failed");
+                        session.appendGenerated(outcome.message);
+                        trace.tool(outcome.record);
+                    }
                     await this.notify({ type: "messageCommitted", runId: run.id, stepId, message: lastMessage.snapshot(), operation: commitContext.operation });
                 }
                 catch (commitError) {
@@ -371,15 +387,21 @@ export class Agent<S extends SessionLike = SessionLike> {
                 try {
                     session.assertGenerationUnchanged();
                     const history = session.history();
-                    const answered = new Set(history.flatMap(message => message.parts.filter(part => part.type === "tool_result").map(part => part.toolCallId)));
-                    for (const message of history)
-                        for (const call of message.toolCalls)
-                            if (!answered.has(call.toolCallId)) {
-                                const outcome = this.failedTool(call, new Error("Run stopped before this tool produced a result; operation was not started by this step"), run.id, stepId);
-                                session.appendGenerated(outcome.message);
-                                trace.tool(outcome.record);
-                                answered.add(call.toolCallId);
+                    // IDs identify a call within its batch, not across the entire conversation.
+                    const pending: Message["toolCalls"][number][] = [];
+                    for (const message of history) for (const part of message.parts) {
+                        if (part.type === "tool_call") pending.push(part);
+                        if (part.type === "tool_result") {
+                            for (let index = pending.length - 1; index >= 0; index--) if (pending[index].toolCallId === part.toolCallId) {
+                                pending.splice(index, 1); break;
                             }
+                        }
+                    }
+                    for (const call of pending) {
+                        const outcome = this.failedTool(call, new Error("Run stopped before this tool produced a result; operation was not started by this step"), run.id, stepId, interrupted ? "interrupted" : "failed");
+                        session.appendGenerated(outcome.message);
+                        trace.tool(outcome.record);
+                    }
                 }
                 catch { /* External edits take precedence over protocol repairs. */
                 }
@@ -408,9 +430,9 @@ export class Agent<S extends SessionLike = SessionLike> {
             throw new AgentRunError(result!, result!.error);
         return result!;
     }
-    private failedTool(call: Message["toolCalls"][number], error: unknown, runId: string, stepId: string): ToolOutcome {
-        const message = Message.tool(call.toolCallId, { error: errorOf(error).message }, call.name);
-        const record = error instanceof ToolExecutionError ? { ...error.record, resultMessageId: message.id } : { id: id("execution"), runId, stepId, toolCallId: call.toolCallId, name: call.name, arguments: {}, status: "failed" as const, resultMessageId: message.id, error: errorOf(error).message };
+    private failedTool(call: Message["toolCalls"][number], error: unknown, runId: string, stepId: string, status: "failed" | "interrupted" = "failed"): ToolOutcome {
+        const message = Message.tool(call.toolCallId, { error: errorOf(error).message, ...(status === "interrupted" ? { interrupted: true } : {}) }, call.name);
+        const record = error instanceof ToolExecutionError ? { ...error.record, resultMessageId: message.id } : { id: id("execution"), runId, stepId, toolCallId: call.toolCallId, name: call.name, arguments: {}, status, resultMessageId: message.id, error: errorOf(error).message };
         return { message, record };
     }
 }

@@ -1,5 +1,7 @@
 # CharacterEditor 反馈落实与接入契约
 
+2026-10-27 接入审计的后续修补已进入 **3.0.2**：长度策略开关、流式完成/错误检查、工具启动守卫、重复调用 ID 修复、partial 来源与列表性能，以及 afterCommit 取消契约。详见 [修补记录](./FIXES-3.0.2.md)；下文保留最初 3.0.0 对接说明。
+
 2026-10-08，对应 AgentEngine 3.0.0。依据 CE 的 [需求文档](D:/Code/NodeJs/CharacterEditor/docs/plans/2026-10-08-agentengine-3-feedback.md)。此次修改与合成验证均在 AgentEngine 中完成，CharacterEditor 的代码和原反馈文档未修改。
 
 ## 反馈处理结果

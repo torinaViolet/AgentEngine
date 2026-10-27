@@ -7,6 +7,7 @@ import { StreamParser, OpenAIResponsesStreamParser, AnthropicStreamParser, Gemin
 import type { MessageStreamParser } from "../legacy/stream";
 import { Provider, ChatProvider, HttpProviderOptions, ChatHttpRequest, ModelRequest, ModelResponse, ModelEvent, GenerationConfig, GenerationError, SerializedMessages } from './Provider';
 import { decodeSSE } from './transport';
+import { assertNoResponseError, StreamCompletion } from './streamCompletion';
 type Protocol = "openai" | "responses" | "anthropic" | "gemini";
 const defaults: Record<Protocol, string> = { openai: "https://api.openai.com/v1", responses: "https://api.openai.com/v1", anthropic: "https://api.anthropic.com/v1", gemini: "https://generativelanguage.googleapis.com/v1beta" };
 export class HttpProvider extends Provider implements ChatProvider {
@@ -86,11 +87,13 @@ export class HttpProvider extends Provider implements ChatProvider {
         let finishReason: string | undefined;
         if (!options.stream) {
             const raw = await abortable(response.json(), options.signal);
+            assertNoResponseError(raw);
             message = this.adapter.deserializeResponse ? this.adapter.deserializeResponse(raw) : this.adapter.deserialize(raw);
             finishReason = this.adapter.getFinishReason?.(raw);
         }
         else {
             const parser = this.parser();
+            const completion = new StreamCompletion(this.protocol);
             const send = async (events: ReturnType<MessageStreamParser["feed"]>) => {
                 for (const event of events) {
                     if (event.type === "error")
@@ -104,8 +107,11 @@ export class HttpProvider extends Provider implements ChatProvider {
                 }
             };
             try {
-                for await (const chunk of decodeSSE(response, options.signal))
+                for await (const chunk of decodeSSE(response, options.signal)) {
+                    completion.feed(chunk);
                     await send(parser.feed(chunk));
+                }
+                completion.finish();
                 await send(parser.finish());
             }
             catch (error) {

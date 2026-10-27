@@ -165,3 +165,25 @@ export class GenerationError extends Error {
         this.name = cause instanceof Error ? cause.name : "GenerationError";
     }
 }
+/** A successful HTTP transport ended before the protocol completed a model response. */
+export class IncompleteStreamError extends Error {
+    readonly code = "INCOMPLETE_STREAM";
+    constructor(readonly protocol: string) {
+        super(`The ${protocol} stream ended before its completion event`);
+        this.name = "IncompleteStreamError";
+    }
+}
+/** Preserve an error delivered inside a successful HTTP response instead of discarding it as an unknown event. */
+export class ProviderStreamError extends Error {
+    readonly code?: string | number;
+    readonly type?: string;
+    readonly status?: number;
+    constructor(readonly detail: unknown) {
+        const data = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
+        super(typeof data.message === "string" ? data.message : typeof detail === "string" ? detail : "Provider returned an error response", { cause: detail });
+        this.name = "ProviderStreamError";
+        if (typeof data.code === "string" || typeof data.code === "number") this.code = data.code;
+        if (typeof data.type === "string") this.type = data.type;
+        if (typeof data.status === "number") this.status = data.status;
+    }
+}

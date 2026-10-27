@@ -31,18 +31,33 @@ export class ListSession extends BaseSession {
     private selected(row: ListRow): ListCandidate {
         return row.candidates.find(c => c.id === row.selectedCandidateId)!;
     }
-    private prefix(end: number): string {
-        const source = JSON.stringify([this.system.id, this.system.requestRevision, ...this.items.slice(0, end).map(row => [row.id, this.selected(row).id, this.selected(row).messageIds.map(key => [key, this.getMessage(key)!.requestRevision])])]);
+    /** Hash the exact existing JSON representation incrementally, preserving 3.0 context values. */
+    private *prefixes(): Generator<string> {
         let hash = 2166136261;
         let second = 2246822519;
-        for (let i = 0; i < source.length; i++) {
-            hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
-            second = Math.imul(second ^ source.charCodeAt(i), 3266489917);
+        const feed = (source: string) => {
+            for (let i = 0; i < source.length; i++) {
+                hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+                second = Math.imul(second ^ source.charCodeAt(i), 3266489917);
+            }
+        };
+        const closed = () => `${(Math.imul(hash ^ 93, 16777619) >>> 0).toString(16)}:${(Math.imul(second ^ 93, 3266489917) >>> 0).toString(16)}`;
+        feed(`[${JSON.stringify(this.system.id)},${this.system.requestRevision}`);
+        yield closed();
+        for (const row of this.items) {
+            const selected = this.selected(row);
+            feed(`,${JSON.stringify([row.id, selected.id, selected.messageIds.map(key => [key, this.getMessage(key)!.requestRevision])])}`);
+            yield closed();
         }
-        return `${(hash >>> 0).toString(16)}:${(second >>> 0).toString(16)}`;
+    }
+    private prefix(end: number): string {
+        let index = 0;
+        for (const prefix of this.prefixes()) if (index++ === end) return prefix;
+        throw new Error("Invalid history prefix");
     }
     get staleRowIds(): string[] {
-        return this.items.filter((row, index) => this.selected(row).context !== this.prefix(index)).map(row => row.id);
+        const prefixes = this.prefixes();
+        return this.items.filter(row => this.selected(row).context !== prefixes.next().value).map(row => row.id);
     }
     history(): Message[] {
         const end = this.regeneration ?? this.generationEnd ?? this.items.length;
@@ -164,8 +179,9 @@ export class ListSession extends BaseSession {
         this.refreshTurn();
     }
     acceptHistory(): void {
-        for (let i = 0; i < this.items.length; i++)
-            this.selected(this.items[i]).context = this.prefix(i);
+        const prefixes = this.prefixes();
+        for (const row of this.items)
+            this.selected(row).context = prefixes.next().value!;
         this.structureVersion++;
     }
     truncateAfter(rowId: string | null): void {
