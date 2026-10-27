@@ -119,7 +119,7 @@ generation 字段：temperature、topP、topK、maxOutputTokens、stop、frequen
 
 不支持或统一/原生冲突的参数会报错；具体模型可能进一步限制取值。Anthropic 未指定输出上限时使用 4096。providerOptions 是平台扩展，不配置运行超时、审批或上下文；不能覆盖 model/messages/input/contents/tools/stream/system。框架不会自动重试模型请求。
 
-transport 接收 `{url,method,headers,body?,signal,stream,purpose?}` 并返回标准 Response，支持 GET/POST/PUT/PATCH/DELETE 和 JSON、multipart、二进制 body。stream 始终为显式 boolean，内置聊天请求的 purpose 为 chat；子类可设置 image/audio/video/embedding/models/custom，未指定时基类采用 custom。这些字段是传输描述，不写入请求 body。业务可据此实现单次请求超时，与 execution.timeoutMs 的整次运行预算分别处理。
+transport 接收 `{url,method,headers,body?,signal,stream,purpose?}` 并返回标准 Response，支持 GET/POST/PUT/PATCH/DELETE 和 JSON、multipart、二进制 body。stream 始终为显式 boolean，内置聊天请求的 purpose 为 chat；子类可设置 image/audio/video/embedding/models/custom，未指定时基类采用 custom。这些字段是传输描述，不写入请求 body。3.0.1 起可用 Agent / Generator 的 requestTimeoutMs 限制单次完整模型请求，超时通过 signal 取消 transport，与 execution.timeoutMs 的整次运行预算分别处理。
 
 业务可桥接代理/Tauri；流式 Response 的 body 需提供 Web ReadableStream。mediaResolver.resolve(url) 返回 `{base64,mimeType}`，可处理业务附件地址。浏览器默认 BrowserMediaResolver，本地文件解析器从 /node 导入 DefaultMediaResolver。
 
@@ -179,6 +179,7 @@ Executor 配置 approval=auto/manual/policy、approvalTimeoutMs、errorPolicy=re
 const agent = new Agent({
   provider, model: "your-model", session, promptBuilder, toolkit,
   tools: { approval: "manual", approvalTimeoutMs: 60_000 },
+  requestTimeoutMs: 60_000,
   execution: { maxSteps: 10, timeoutMs: 120_000, toolConcurrency: "sequential", toolErrorPolicy: "return" },
 });
 const result = await agent.chat("完成任务");
@@ -195,7 +196,9 @@ const result = await agent.chat("完成任务");
 | abort(reason?) | 取消当前运行 |
 | previewContext(options?) | 无消耗预览 run、continue 或 resume 请求上下文 |
 
-options 支持 signal、stream、generation、execution、thinking。maxSteps 默认 10；timeoutMs 覆盖模型、工具和审批等待；工具默认 sequential，也可 parallel，与 toolErrorPolicy 独立。return 将异常回传模型；pause/throw 保存失败工具结果后结束，应用决定是否 resume。审批拒绝是工具结果。
+options 支持 signal、stream、generation、execution、thinking、requestTimeoutMs。execution.maxSteps 默认 10，3.0.1 起 0 表示不限轮数；负数、非整数和非有限值无效。execution.timeoutMs 覆盖整次运行的模型、工具和审批等待，0 或不设置表示不限时。工具默认 sequential，也可 parallel，与 toolErrorPolicy 独立。return 将异常回传模型；pause/throw 保存失败工具结果后结束，应用决定是否 resume。审批拒绝是工具结果。
+
+requestTimeoutMs 是单次完整模型请求（包括整段流式响应）的毫秒上限，不是流式空闲超时，也不包含提示词准备、工具或审批等待。每个模型步骤重新计时。优先级为单次 chat/run/continue/resume 选项 > Agent 配置 > Generator 配置；Generator.generate 也可直接覆盖默认值。0 明确关闭继承的请求超时，未配置则不限时。负数及非有限值无效。达到请求或总运行超时后，AgentResult.status 为 interrupted、stopReason 为 timeout；保留可提交的片段，编辑冲突时保留到 unapplied。调用方 signal 的取消仍然有效。
 
 AgentResult 包含 runId/turnId?/status/stopReason/message?/usage/error?/unapplied?/unappliedToolResults?。失败、取消、超时、maxSteps、输出长度限制抛 AgentRunError，其 result 保存进度；lastRunState 保存最近结果。一个 Agent 或一个 Session 同时只允许一个活动 Agent 执行，重叠 chat 在添加输入前被拒绝。
 

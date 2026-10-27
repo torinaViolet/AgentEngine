@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.1 - 2026-10-27
+
+- Retain partial replies when a later model request fails during a continuation tool loop. The initial failed continuation still rolls back; cancellation and timeouts retain partial progress, and concurrent content edits still take precedence. Later commit hooks receive a create context without the original continuation target.
+- `execution.maxSteps: 0` now means unlimited model steps. Positive limits and the default of 10 are unchanged; cancellation and timeouts still stop unlimited loops.
+- Add `requestTimeoutMs` to Agent/Generator defaults and per-call options. It bounds each complete model request, including streaming, without counting tool or approval waits. `0` disables the request timeout. Request timeouts cancel the transport and retain available partial output.
+- `execution.timeoutMs: 0` now disables the total run deadline. Request and total timeouts remain separate; negative and non-finite timeout values are rejected.
+
 ## 3.0.0 - 2026-10-26
 
 - CE feedback: business Message metadata/tags and Session metadata can change during runs without invalidating request leases; content and protocol edits still conflict. Custom request metadata keys persist alongside separate request revisions.

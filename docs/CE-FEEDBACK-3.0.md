@@ -126,7 +126,7 @@ roots 指定根节点顺序，children 指定兄弟顺序，nodes 表顺序不�
 
 ## 传输与思考配置
 
-transport 可直接用 request.stream / request.purpose 决定联网策略，不必解析平台 body 或 URL。执行预算 execution.timeoutMs 仍涵盖整次模型、工具和审批等待；CE 的单次非流式模型超时应在自己的 transport 中实现，并继续传递 signal。
+transport 可直接用 request.stream / request.purpose 决定联网策略，不必解析平台 body 或 URL。执行预算 execution.timeoutMs 仍涵盖整次模型、工具和审批等待。3.0.1 新增 requestTimeoutMs 限制单次完整模型请求（含流式），0 表示不限时；CE 原有只对非流式请求计时的策略可继续保留在自己的 transport 中。transport 应继续传递 signal。
 
 ```ts
 const agent = new Agent({

@@ -6,7 +6,9 @@ import { PromptBuilder, PromptContext, PromptBuildOptions } from "../prompt";
 import { AgentSession, ListSession, RunRecord, SessionConflictError, SessionLike, TokenUsage, TreeSession, prepareContinuation, ContinuationCommitOptions } from "../session";
 import { ToolEvent, ToolExecutionError, ToolExecutor, ToolExecutorOptions, ToolKit, ToolOutcome } from "../tool";
 export interface AgentExecutionConfig {
+    /** Maximum model steps; 0 means unlimited. Default: 10. */
     maxSteps?: number;
+    /** Total run timeout in milliseconds; 0 means unlimited. */
     timeoutMs?: number;
     toolErrorPolicy?: "return" | "pause" | "throw";
     toolConcurrency?: "sequential" | "parallel";
@@ -17,6 +19,8 @@ export interface RunOptions {
     generation?: GenerationConfig;
     execution?: AgentExecutionConfig;
     thinking?: ThinkingConfig;
+    /** Timeout for each model request in milliseconds; 0 means unlimited. Excludes tool/approval time. */
+    requestTimeoutMs?: number;
 }
 export interface ContinueOptions extends RunOptions { targetMessageId?: string; instruction?: string; carryThinking?: boolean; }
 export type PreviewContextOptions = { kind?: "run" } | ({ kind: "continue" } & Pick<ContinueOptions, "targetMessageId" | "instruction" | "carryThinking">) | { kind: "resume" };
@@ -64,6 +68,8 @@ type SessionOptions<S extends SessionLike> = {
     };
 };
 export type AgentOptions<S extends SessionLike = SessionLike> = ModelOptions & SessionOptions<S> & {
+    /** Per-model-request timeout; run options override this, then Generator defaults. 0 means unlimited. */
+    requestTimeoutMs?: number;
     promptBuilder?: PromptBuilder;
     toolkit?: ToolKit;
     toolExecutor?: ToolExecutor;
@@ -222,16 +228,16 @@ export class Agent<S extends SessionLike = SessionLike> {
     }
     private async execute(kind: RunRecord["kind"], options: RunOptions, target?: Message, instruction?: string, carryThinking = false, resumedFrom?: string): Promise<AgentResult> {
         const config = { maxSteps: 10, ...this.options.execution, ...options.execution };
-        assert(Number.isSafeInteger(config.maxSteps) && config.maxSteps > 0, "maxSteps must be a positive integer");
+        assert(Number.isSafeInteger(config.maxSteps) && config.maxSteps >= 0, "maxSteps must be a non-negative integer (0 means unlimited)");
         if (config.timeoutMs !== undefined)
-            assert(Number.isFinite(config.timeoutMs) && config.timeoutMs > 0, "timeoutMs must be positive");
+            assert(Number.isFinite(config.timeoutMs) && config.timeoutMs >= 0, "timeoutMs must be non-negative (0 means unlimited)");
         const controller = new AbortController();
         this.controller = controller;
         const externalAbort = () => controller.abort(options.signal?.reason);
         options.signal?.addEventListener("abort", externalAbort, { once: true });
         if (options.signal?.aborted)
             externalAbort();
-        const timer = config.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new DOMException("Agent run timed out", "TimeoutError")), config.timeoutMs);
+        const timer = !config.timeoutMs ? undefined : setTimeout(() => controller.abort(new DOMException("Agent run timed out", "TimeoutError")), config.timeoutMs);
         const session = this.session;
         const trace = session.trace;
         const turnId = resumedFrom ? trace.records.runs.find(r => r.id === resumedFrom)?.turnId : session.currentTurnId;
@@ -253,7 +259,7 @@ export class Agent<S extends SessionLike = SessionLike> {
             session.beginGeneration();
             started = true;
             await this.notify({ type: "runStarted", runId: run.id });
-            for (let index = 0; index < config.maxSteps; index++) {
+            for (let index = 0; config.maxSteps === 0 || index < config.maxSteps; index++) {
                 controller.signal.throwIfAborted();
                 session.assertGenerationUnchanged();
                 const step = trace.step(run.id);
@@ -263,7 +269,7 @@ export class Agent<S extends SessionLike = SessionLike> {
                 const context = await abortable(this.promptBuilder.buildContext(input.messages, input.options), controller.signal);
                 await abortable(Promise.resolve(this.options.hooks?.beforeRequest?.(context, { runId: run.id, stepId })), controller.signal);
                 session.assertGenerationUnchanged();
-                const response = await this.generator.generate({ messages: context.messages, tools: this.toolExecutor.toolkit.definitions, generation: options.generation, signal: controller.signal, stream: options.stream,
+                const response = await this.generator.generate({ messages: context.messages, tools: this.toolExecutor.toolkit.definitions, generation: options.generation, signal: controller.signal, stream: options.stream, requestTimeoutMs: options.requestTimeoutMs ?? this.options.requestTimeoutMs,
                     thinking: { mode: "auto", scope: "tool_call", ...this.generator.options.thinking, ...this.options.thinking, ...options.thinking }, identity: { runId: run.id, stepId }, onEvent: event => this.notify(event) });
                 generated = response.message;
                 modelCompleted = true;
@@ -336,14 +342,17 @@ export class Agent<S extends SessionLike = SessionLike> {
         }
         catch (error) {
             const partial = error instanceof GenerationError ? error.partial?.message : undefined;
-            const interrupted = controller.signal.aborted;
+            const timedOut = errorOf(controller.signal.aborted ? controller.signal.reason : error instanceof GenerationError ? error.cause : error).name === "TimeoutError";
+            const interrupted = controller.signal.aborted || timedOut;
             let conflict = error instanceof SessionConflictError;
             let unappliedPartial = partial;
             if (stepId && !modelCompleted)
                 trace.updateStep(stepId, { status: interrupted ? "interrupted" : "failed", error: errorOf(error).message });
-            if (partial && !partial.isEmpty && (!target || interrupted) && started && stepId) {
+            // Only the initial failed continuation segment rolls back. Later tool-loop steps
+            // create independent replies and retain partial output just like an ordinary run.
+            if (partial && !partial.isEmpty && (!target || !first || interrupted) && started && stepId) {
                 try {
-                    const commitContext: CommitContext = { runId: run.id, stepId, operation: target && first ? "append" : "create", targetMessageId: target?.id };
+                    const commitContext: CommitContext = { runId: run.id, stepId, operation: target && first ? "append" : "create", targetMessageId: target && first ? target.id : undefined };
                     const prepared = await this.prepareCommit(partial, commitContext); const transformed = prepared.generated;
                     lastMessage = target && first ? session.appendContinuation(target.id, transformed, prepared.append) : session.appendGenerated(transformed);
                     unappliedPartial = undefined;
@@ -375,13 +384,13 @@ export class Agent<S extends SessionLike = SessionLike> {
                 catch { /* External edits take precedence over protocol repairs. */
                 }
             }
-            result = { runId: run.id, turnId, status: interrupted ? "interrupted" : "failed", stopReason: conflict ? "conflict" : interrupted ? errorOf(controller.signal.reason).name === "TimeoutError" ? "timeout" : "abort" : error instanceof ToolExecutionError ? "toolError" : errorOf(error).message.includes("maxSteps") ? "maxSteps" : "error", message: lastMessage, usage: trace.usage(run.id), error: errorOf(error), unapplied: generated ?? unappliedPartial, unappliedToolResults: unappliedToolResults.length ? unappliedToolResults : undefined };
+            result = { runId: run.id, turnId, status: interrupted ? "interrupted" : "failed", stopReason: conflict ? "conflict" : interrupted ? timedOut ? "timeout" : "abort" : error instanceof ToolExecutionError ? "toolError" : errorOf(error).message.includes("maxSteps") ? "maxSteps" : "error", message: lastMessage, usage: trace.usage(run.id), error: errorOf(error), unapplied: generated ?? unappliedPartial, unappliedToolResults: unappliedToolResults.length ? unappliedToolResults : undefined };
         }
         finally {
             if (started)
                 session.endGeneration();
             toolEvents();
-            if (timer)
+            if (timer !== undefined)
                 clearTimeout(timer);
             options.signal?.removeEventListener("abort", externalAbort);
             this.controller = undefined;
