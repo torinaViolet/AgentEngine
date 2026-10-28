@@ -11,7 +11,11 @@ export const fetchTransport: Transport = request => {
     if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) init.duplex = "half";
     return fetch(request.url, init);
 };
-export interface SSEOptions { maxEventBytes?: number; }
+export interface SSEOptions {
+    maxEventBytes?: number;
+    /** Reports an explicit data: [DONE] marker, never a bare EOF; the marker is not yielded as JSON. */
+    onDone?: () => void;
+}
 /** Byte framing and cancellation belong to transport, protocol content belongs to the codec. */
 export async function* decodeSSE(response: Response, signal?: AbortSignal, options: SSEOptions = {}): AsyncIterable<unknown> {
     const maxBytes = options.maxEventBytes ?? 16 * 1024 * 1024;
@@ -38,6 +42,7 @@ export async function* decodeSSE(response: Response, signal?: AbortSignal, optio
             bufferedBytes += 2;
         }
         for (let match = /\r?\n\r?\n/.exec(buffer); match; match = /\r?\n\r?\n/.exec(buffer)) {
+            signal?.throwIfAborted();
             const block = buffer.slice(0, match.index);
             const blockBytes = encoder.encode(block).byteLength;
             assert(blockBytes <= maxBytes, "SSE event exceeds maxEventBytes");
@@ -47,7 +52,10 @@ export async function* decodeSSE(response: Response, signal?: AbortSignal, optio
             const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
             if (data === "[DONE]") {
                 ended = true;
-                break;
+                buffer = "";
+                bufferedBytes = 0;
+                options.onDone?.();
+                return;
             }
             if (data) {
                 const event = JSON.parse(data);
@@ -68,9 +76,12 @@ export async function* decodeSSE(response: Response, signal?: AbortSignal, optio
             for (const event of drain(false))
                 yield event;
         }
-        const text = decoder.decode(); buffer += text; bufferedBytes += encoder.encode(text).byteLength;
-        for (const event of drain(true))
-            yield event;
+        if (!ended) {
+            const text = decoder.decode(); buffer += text; bufferedBytes += encoder.encode(text).byteLength;
+            for (const event of drain(true))
+                yield event;
+        }
+        signal?.throwIfAborted();
     }
     finally {
         await reader.cancel().catch(() => {

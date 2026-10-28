@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.3 - 2026-10-28
+
+- OpenAIProvider / OpenAICompatibleProvider now default to `streamCompletion: "compatible"`, accepting an explicit `[DONE]` after a valid assistant response when a relay omits `finish_reason`. Missing reasons stay undefined; explicit reasons, including length limits, remain unchanged. Use `streamCompletion: "strict"` to retain the 3.0.2 requirement. Other protocols still require their native completion events.
+- Check all tool-call IDs, names and complete JSON object arguments before accepting DONE as fallback completion. ToolExecutor schema validation and approval still apply. Bare EOF, lone DONE, in-band errors, cancellation and timeouts do not become successful replies.
+- Add an optional SSE `onDone` notification without changing yielded JSON events. Treat DONE as terminal even when trailing data shares its network chunk, and recheck cancellation before processing buffered events and completing a response.
+- Add 47 regression cases covering compatibility, strict mode, tool validation, continuation, partial errors and buffered cancellation. Full suite: 394 tests, 393 passed, one opt-in live API test skipped; browser runtime/build and package exports passed.
+
 ## 3.0.2 - 2026-10-27
 
 - Add `execution.lengthPolicy: "error" | "complete"` to Agent defaults and per-run options. The default remains `error`; opt-in `complete` finishes a length-limited final reply with `stopReason: "length"`. Truncated tool-call responses still fail without executing tools, including continuations.

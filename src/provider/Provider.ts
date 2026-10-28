@@ -88,7 +88,10 @@ export interface ProviderOptions {
     transport?: Transport;
     mediaResolver?: MediaResolver;
 }
-export type HttpProviderOptions = ProviderOptions;
+export interface HttpProviderOptions extends ProviderOptions {
+    /** OpenAI Chat Completions only: accept explicit DONE after a valid response (default), or require finish_reason. */
+    streamCompletion?: "compatible" | "strict";
+}
 export interface ProviderRequestOptions {
     method?: HttpRequest["method"];
     body?: HttpRequest["body"];

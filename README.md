@@ -68,6 +68,8 @@ console.log(response.message.text);
 
 提供 OpenAIProvider（Chat Completions / OpenAI compatible）、OpenAIResponsesProvider、AnthropicProvider 和 GeminiProvider。运行时无需安装厂商 SDK，默认使用标准 fetch、Response 和 Web Streams；支持自定义地址、传输与附件解析器。工具校验依赖 Ajv。
 
+OpenAI 兼容流默认接受有效助手响应后的 `[DONE]`，兼容省略 finish_reason 的中转；缺失原因保持未知，提前断流仍失败。可在 Provider 构造配置中设置 `streamCompletion: "strict"`，要求明确的 finish_reason。详见 [流式完成规则](./docs/API.md#generator一次请求)。
+
 框架复用经过验证的内部协议转换与解析代码，2.x 兼容层独立保留。浏览器入口不包含 Node builtin；本地文件附件解析器从 `@notic/agent-engine/node` 导入。
 
 业务可以继承 Provider 或现有厂商 Provider，实现 ImageProvider、AudioProvider、VideoProvider，复用鉴权、传输、SSE、二进制和附件解析。视频任务提交与查询分开，便于恢复已有任务。Message 支持视频内容块；内置聊天 codec 暂不编码视频输入，可覆盖 serializeMessages 扩展。媒体接口由子类实现，详见 [多媒体扩展](./docs/MULTIMEDIA-3.0.md)。

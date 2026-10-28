@@ -108,7 +108,7 @@ const wire = await provider.buildRequest({
 }, false);
 ```
 
-HTTP Provider 接受 apiKey（字符串/异步函数）、baseURL、headers、transport、mediaResolver。buildRequest(request,stream?,signal?) 只转换，不发送；generate(request,{stream,signal?},emit?) 返回统一 ModelResponse，普通业务使用 Generator 取得配置校验与稳定身份。
+HTTP Provider 接受 apiKey（字符串/异步函数）、baseURL、headers、transport、mediaResolver，以及 OpenAI Chat 专用的 streamCompletion。buildRequest(request,stream?,signal?) 只转换，不发送；generate(request,{stream,signal?},emit?) 返回统一 ModelResponse，普通业务使用 Generator 取得配置校验与稳定身份。
 
 generation 字段：temperature、topP、topK、maxOutputTokens、stop、frequencyPenalty、presencePenalty、seed、responseFormat、providerOptions。responseFormat 为 text、json_object 或 `{type:"json_schema",name?,schema}`。
 
@@ -147,7 +147,20 @@ const response = await generator.generate({
 
 ProviderRequestError 含 HTTP status；流失败用 GenerationError(cause,partial?) 保留部分响应。自定义聊天实现 ChatProvider.generate，应把 signal 传到真实操作；Generator 会限制独立实现的等待并忽略迟到事件。HttpProvider 子类覆盖 generate 时需遵守原有取消契约，以保留原生部分状态。取消无法终止忽略 signal 的底层副作用，传输和工具需合作取消。
 
-3.0.2 起，内置 HttpProvider 只有看到本协议的完成信号才接受完整流式响应：OpenAI Chat 的 finish_reason、Responses 的 response.completed/response.incomplete、Anthropic 的 message_stop、Gemini candidate 的 finishReason。仅关闭 HTTP body 或 OpenAI 的 `[DONE]` 本身不能证明模型响应完整；提前 EOF 抛 GenerationError，其 cause 为 IncompleteStreamError（code=INCOMPLETE_STREAM），partial 保留已收到内容，不执行其中的残缺工具调用。流内错误信封会抛出 ProviderStreamError，保留 detail、message 及可用的 code/type/status；流式情况下它作为 GenerationError.cause 返回。非流式 HTTP 200 错误信封同样识别。自定义 ChatProvider 的完成判断仍由实现者负责。
+内置 HttpProvider 要求本协议的完成信号。3.0.3 起，OpenAIProvider（OpenAICompatibleProvider 的别名）默认使用 `streamCompletion: "compatible"`：接受非空 finish_reason，也接受有效助手响应之后的显式 `data: [DONE]`。有效响应包括正文、思考、工具调用增量或 assistant 角色起始块；只有 `[DONE]`、usage 或空 delta 不算有效响应。缺失的 finishReason 保持 undefined，Step 记录同样保留未知，不推断为 stop；已有 length、tool_calls、content_filter 等原因不会被 `[DONE]` 覆盖。仅凭结束标记无法还原中转站省略的截断原因。
+
+需要沿用 3.0.2 的严格检查时，在 Provider 构造配置中设置 `streamCompletion: "strict"`，只接受 finish_reason：
+
+```ts
+const provider = new OpenAIProvider({
+  apiKey: "key", baseURL: "https://your-proxy/v1",
+  streamCompletion: "strict",
+});
+```
+
+streamCompletion 不进入请求 body，也不影响非流式请求。其他协议始终要求各自的原生完成信号：Responses 的 response.completed/response.incomplete、Anthropic 的 message_stop、Gemini candidate 的 finishReason；不能用 `[DONE]` 替代。通过 `[DONE]` 回退完成的 OpenAI 响应，会先检查所有工具调用都有非空 ID/名称及完整的 JSON 对象参数，不把空参数补成 `{}`；实际执行仍经过 ToolExecutor 的 schema 校验、启用检查和审批。
+
+没有任何可接受完成信号就关闭 HTTP body，仍抛 GenerationError，其 cause 为 IncompleteStreamError（code=INCOMPLETE_STREAM），partial 保留已收到内容，不执行残缺工具调用。流内错误信封会抛出 ProviderStreamError，保留 detail、message 及可用的 code/type/status；流式情况下它作为 GenerationError.cause 返回。非流式 HTTP 200 错误信封同样识别。错误、取消和超时不会因缓冲区已有 `[DONE]` 而转成成功。自定义 ChatProvider 的完成判断仍由实现者负责。
 
 ## ToolExecutor：独立审批与执行
 

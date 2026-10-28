@@ -12,8 +12,11 @@ type Protocol = "openai" | "responses" | "anthropic" | "gemini";
 const defaults: Record<Protocol, string> = { openai: "https://api.openai.com/v1", responses: "https://api.openai.com/v1", anthropic: "https://api.anthropic.com/v1", gemini: "https://generativelanguage.googleapis.com/v1beta" };
 export class HttpProvider extends Provider implements ChatProvider {
     private adapter: MessageAdapter;
+    private readonly streamCompletion: HttpProviderOptions["streamCompletion"];
     constructor(readonly protocol: Protocol, options: HttpProviderOptions = {}) {
         super({ ...options, baseURL: options.baseURL ?? defaults[protocol] });
+        assert(options.streamCompletion === undefined || options.streamCompletion === "compatible" || options.streamCompletion === "strict", "streamCompletion must be compatible or strict");
+        this.streamCompletion = options.streamCompletion ?? "compatible";
         this.adapter = protocol === "openai" ? new OpenAIAdapter(options.mediaResolver) : protocol === "responses" ? new OpenAIResponsesAdapter(options.mediaResolver) : protocol === "anthropic" ? new AnthropicAdapter(options.mediaResolver) : new GeminiAdapter(options.mediaResolver);
     }
     private parser(): MessageStreamParser {
@@ -93,7 +96,7 @@ export class HttpProvider extends Provider implements ChatProvider {
         }
         else {
             const parser = this.parser();
-            const completion = new StreamCompletion(this.protocol);
+            const completion = new StreamCompletion(this.protocol, this.streamCompletion);
             const send = async (events: ReturnType<MessageStreamParser["feed"]>) => {
                 for (const event of events) {
                     if (event.type === "error")
@@ -107,11 +110,12 @@ export class HttpProvider extends Provider implements ChatProvider {
                 }
             };
             try {
-                for await (const chunk of decodeSSE(response, options.signal)) {
+                for await (const chunk of decodeSSE(response, options.signal, { onDone: () => completion.done() })) {
                     completion.feed(chunk);
                     await send(parser.feed(chunk));
                 }
-                completion.finish();
+                options.signal?.throwIfAborted();
+                completion.finish(parser.snapshot.toolCalls);
                 await send(parser.finish());
             }
             catch (error) {
